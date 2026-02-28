@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alaa/dbplus/internal/database"
+	"github.com/alaa/dbplus/internal/tui/components/dataview"
 	"github.com/alaa/dbplus/internal/tui/components/sidebar"
 	"github.com/alaa/dbplus/internal/tui/components/statusbar"
 	"github.com/alaa/dbplus/internal/tui/components/titlebar"
@@ -20,6 +23,8 @@ const (
 	PaneQueryEditor
 )
 
+const totalPanes = 2 // sidebar + dataview (editor added in Sprint 4)
+
 // Model is the root Bubble Tea model.
 type Model struct {
 	db       *database.DB
@@ -29,6 +34,7 @@ type Model struct {
 
 	// Components
 	sidebar   sidebar.Model
+	dataView  dataview.Model
 	titleBar  titlebar.Model
 	statusBar statusbar.Model
 
@@ -39,9 +45,10 @@ type Model struct {
 	focused      FocusedPane
 
 	// State
-	tables []database.TableInfo
-	ready  bool
-	err    error
+	tables       []database.TableInfo
+	currentTable string
+	ready        bool
+	err          error
 }
 
 // New creates the root model.
@@ -52,6 +59,7 @@ func New(db *database.DB, version string) Model {
 		styles:       DefaultStyles(),
 		version:      version,
 		sidebar:      sidebar.New(db.DatabaseName()),
+		dataView:     dataview.New(),
 		titleBar:     titlebar.New(version),
 		statusBar:    statusbar.New(db.DatabaseName(), db.User(), db.Host()),
 		sidebarRatio: 0.20,
@@ -107,8 +115,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sidebar.SetTables(msg.Tables)
 
 	case sidebar.TableSelectedMsg:
-		// Will be handled in Sprint 3 with DataView
-		_ = msg.TableName
+		m.currentTable = msg.TableName
+		return m, tea.Batch(
+			m.fetchTableDataCmd(msg.TableName),
+			m.fetchCountCmd(msg.TableName),
+			m.fetchSchemaCmd(msg.TableName),
+		)
+
+	case QueryResultMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		m.err = nil
+		m.dataView.SetData(m.currentTable, msg.Columns, msg.Rows)
+		m.titleBar.SetRowCount(msg.RowCount)
+		m.statusBar.SetQueryInfo(msg.Duration, msg.RowCount)
+
+	case tableCountMsg:
+		m.dataView.SetPage(0, msg.count)
 
 	case SchemaInfoMsg:
 		if msg.Err == nil {
@@ -124,6 +149,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	case PaneDataView:
+		var cmd tea.Cmd
+		m.dataView, cmd = m.dataView.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	return m, tea.Batch(cmds...)
@@ -135,10 +166,6 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	if m.err != nil {
-		return m.styles.Error.Render("Error: " + m.err.Error())
-	}
-
 	// Title bar
 	titleView := m.titleBar.View()
 
@@ -146,42 +173,57 @@ func (m Model) View() string {
 	statusView := m.statusBar.View()
 
 	// Available height for middle section
-	availHeight := m.height - 2 // title + status bars
+	availHeight := m.height - 2
 
 	// Sidebar
 	sidebarWidth := int(float64(m.width) * m.sidebarRatio)
 	mainWidth := m.width - sidebarWidth
 
 	sidebarView := m.sidebar.View()
+	dataViewView := m.dataView.View()
 
-	// Placeholder for right pane (DataView + Editor will come in Sprint 3-4)
-	rightContent := m.renderPlaceholder(mainWidth, availHeight)
+	// Error overlay in data area
+	if m.err != nil {
+		errStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#F38BA8")).
+			Width(mainWidth - 2).
+			Height(availHeight - 2).
+			Padding(1)
+		dataViewView = errStyle.Render(
+			m.styles.Error.Render(fmt.Sprintf("Error: %v", m.err)),
+		)
+	}
 
 	// Compose layout
-	middleRow := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightContent)
+	middleRow := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, dataViewView)
 
 	return lipgloss.JoinVertical(lipgloss.Left, titleView, middleRow, statusView)
 }
 
 func (m *Model) updateLayout() {
 	sidebarWidth := int(float64(m.width) * m.sidebarRatio)
+	mainWidth := m.width - sidebarWidth
 	availHeight := m.height - 2
 
 	m.sidebar.SetSize(sidebarWidth, availHeight)
-	m.sidebar.SetFocused(m.focused == PaneSidebar)
+	m.dataView.SetSize(mainWidth, availHeight)
+	m.updateFocus()
 	m.titleBar.SetWidth(m.width)
 	m.statusBar.SetWidth(m.width)
 }
 
 func (m *Model) updateFocus() {
 	m.sidebar.SetFocused(m.focused == PaneSidebar)
+	m.dataView.SetFocused(m.focused == PaneDataView)
 }
 
 func (m *Model) cycleFocus(dir int) {
-	// For now only sidebar is focusable; more panes in Sprint 3-4
-	total := 1 // will become 3
-	m.focused = FocusedPane((int(m.focused) + dir + total) % total)
+	next := (int(m.focused) + dir + totalPanes) % totalPanes
+	m.focused = FocusedPane(next)
 }
+
+// tea.Cmd factories
 
 func (m Model) fetchTableListCmd() tea.Cmd {
 	return func() tea.Msg {
@@ -190,20 +232,45 @@ func (m Model) fetchTableListCmd() tea.Cmd {
 	}
 }
 
-func (m Model) renderPlaceholder(width, height int) string {
-	border := lipgloss.Color("#444444")
+func (m Model) fetchTableDataCmd(table string) tea.Cmd {
+	db := m.db
+	pageSize := m.dataView.PageSize()
+	return func() tea.Msg {
+		result, err := db.FetchTableData(table, pageSize, 0)
+		if err != nil {
+			return QueryResultMsg{Err: err}
+		}
+		return QueryResultMsg{
+			Columns:  result.Columns,
+			Rows:     result.Rows,
+			RowCount: result.RowCount,
+			Duration: result.Duration,
+			IsSelect: true,
+		}
+	}
+}
 
-	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(border).
-		Width(width - 2).
-		Height(height - 2)
+type tableCountMsg struct {
+	count int64
+}
 
-	content := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#626262")).
-		Render("  Select a table to view data (Enter)")
+func (m Model) fetchCountCmd(table string) tea.Cmd {
+	db := m.db
+	return func() tea.Msg {
+		count, err := db.CountRows(table)
+		if err != nil {
+			return tableCountMsg{count: 0}
+		}
+		return tableCountMsg{count: count}
+	}
+}
 
-	return style.Render(content)
+func (m Model) fetchSchemaCmd(table string) tea.Cmd {
+	db := m.db
+	return func() tea.Msg {
+		info, err := db.DescribeTable(table)
+		return SchemaInfoMsg{Info: info, Err: err}
+	}
 }
 
 func min64(a, b float64) float64 {
