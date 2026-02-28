@@ -16,6 +16,11 @@ type TableSelectedMsg struct {
 	TableName string
 }
 
+// SchemaRequestMsg is emitted when the user presses 'i' to view schema info.
+type SchemaRequestMsg struct {
+	TableName string
+}
+
 // KeyMap defines sidebar-specific keybindings.
 type KeyMap struct {
 	Up     key.Binding
@@ -179,6 +184,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			}
 		case key.Matches(msg, m.keyMap.Info):
 			m.showSchema = !m.showSchema
+			if m.showSchema && len(m.tables) > 0 {
+				tableName := m.tables[m.cursor].Name
+				return m, func() tea.Msg {
+					return SchemaRequestMsg{TableName: tableName}
+				}
+			}
 		}
 	}
 

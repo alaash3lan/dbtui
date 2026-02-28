@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
@@ -19,6 +20,8 @@ type KeyMap struct {
 	PageUp   key.Binding
 	Home     key.Binding
 	End      key.Binding
+	Filter   key.Binding
+	ClearFilter key.Binding
 }
 
 // DefaultKeyMap returns dataview key bindings.
@@ -56,20 +59,34 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("end"),
 			key.WithHelp("end", "last row"),
 		),
+		Filter: key.NewBinding(
+			key.WithKeys("/", "ctrl+f"),
+			key.WithHelp("/ ctrl+f", "filter"),
+		),
+		ClearFilter: key.NewBinding(
+			key.WithKeys("escape"),
+			key.WithHelp("esc", "clear filter"),
+		),
 	}
 }
 
 // Model represents the data viewer state.
 type Model struct {
-	columns   []string
-	rows      [][]string
-	colWidths []int
+	columns      []string
+	allRows      [][]string // unfiltered data
+	rows         [][]string // currently displayed (filtered or all)
+	colWidths    []int
 
 	// Viewport cursor
 	cursorRow int
 	cursorCol int
 	scrollRow int
 	scrollCol int
+
+	// Filter
+	filterInput  textinput.Model
+	filterActive bool // true when typing in filter
+	filterText   string
 
 	tableName  string
 	page       int
@@ -83,9 +100,15 @@ type Model struct {
 
 // New creates a new data view model.
 func New() Model {
+	fi := textinput.New()
+	fi.Placeholder = "column | value  or  value"
+	fi.Prompt = "Filter: "
+	fi.CharLimit = 256
+
 	return Model{
-		pageSize: 100,
-		keyMap:   DefaultKeyMap(),
+		pageSize:    100,
+		keyMap:      DefaultKeyMap(),
+		filterInput: fi,
 	}
 }
 
@@ -93,12 +116,13 @@ func New() Model {
 func (m *Model) SetData(tableName string, columns []string, rows [][]string) {
 	m.tableName = tableName
 	m.columns = columns
-	m.rows = rows
+	m.allRows = rows
 	m.cursorRow = 0
 	m.cursorCol = 0
 	m.scrollRow = 0
 	m.scrollCol = 0
-	m.colWidths = calculateColWidths(columns, rows)
+	m.applyFilter()
+	m.colWidths = calculateColWidths(columns, m.rows)
 }
 
 // SetPage sets the current page info.
@@ -110,12 +134,17 @@ func (m *Model) SetPage(page int, totalRows int64) {
 // SetFocused sets focus state.
 func (m *Model) SetFocused(focused bool) {
 	m.focused = focused
+	if !focused {
+		m.filterActive = false
+		m.filterInput.Blur()
+	}
 }
 
 // SetSize sets the component dimensions.
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+	m.filterInput.Width = width - 14 // account for prompt + border
 }
 
 // PageSize returns the configured page size.
@@ -135,20 +164,62 @@ func (m Model) Init() tea.Cmd {
 
 // Update handles input events.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	if !m.focused || len(m.rows) == 0 {
+	if !m.focused {
 		return m, nil
 	}
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When filter input is active, route keys there
+		if m.filterActive {
+			switch {
+			case key.Matches(msg, m.keyMap.ClearFilter):
+				m.filterActive = false
+				m.filterInput.Blur()
+				if m.filterText != "" {
+					// Clear the filter
+					m.filterInput.SetValue("")
+					m.filterText = ""
+					m.applyFilter()
+				}
+				return m, nil
+			case msg.Type == tea.KeyEnter:
+				// Confirm filter, exit filter mode
+				m.filterText = m.filterInput.Value()
+				m.filterActive = false
+				m.filterInput.Blur()
+				m.applyFilter()
+				return m, nil
+			default:
+				var cmd tea.Cmd
+				m.filterInput, cmd = m.filterInput.Update(msg)
+				// Live filtering as user types
+				m.filterText = m.filterInput.Value()
+				m.applyFilter()
+				return m, cmd
+			}
+		}
+
+		// Grid navigation mode
 		switch {
+		case key.Matches(msg, m.keyMap.Filter):
+			m.filterActive = true
+			return m, m.filterInput.Focus()
+		case key.Matches(msg, m.keyMap.ClearFilter):
+			// Escape in grid mode clears filter if active
+			if m.filterText != "" {
+				m.filterInput.SetValue("")
+				m.filterText = ""
+				m.applyFilter()
+				return m, nil
+			}
 		case key.Matches(msg, m.keyMap.Up):
 			if m.cursorRow > 0 {
 				m.cursorRow--
 				m.adjustVerticalScroll()
 			}
 		case key.Matches(msg, m.keyMap.Down):
-			if m.cursorRow < len(m.rows)-1 {
+			if len(m.rows) > 0 && m.cursorRow < len(m.rows)-1 {
 				m.cursorRow++
 				m.adjustVerticalScroll()
 			}
@@ -166,12 +237,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.cursorRow = 0
 			m.scrollRow = 0
 		case key.Matches(msg, m.keyMap.End):
-			m.cursorRow = len(m.rows) - 1
-			m.adjustVerticalScroll()
+			if len(m.rows) > 0 {
+				m.cursorRow = len(m.rows) - 1
+				m.adjustVerticalScroll()
+			}
 		case key.Matches(msg, m.keyMap.PageDown):
 			viewportRows := m.viewportRows()
 			m.cursorRow += viewportRows
-			if m.cursorRow >= len(m.rows) {
+			if len(m.rows) > 0 && m.cursorRow >= len(m.rows) {
 				m.cursorRow = len(m.rows) - 1
 			}
 			m.adjustVerticalScroll()
@@ -186,6 +259,26 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) applyFilter() {
+	f := ParseFilter(m.filterText)
+	if f.Value == "" {
+		m.rows = m.allRows
+	} else {
+		m.rows = ApplyFilter(m.columns, m.allRows, f)
+	}
+
+	// Reset cursor if out of bounds
+	if m.cursorRow >= len(m.rows) {
+		if len(m.rows) > 0 {
+			m.cursorRow = len(m.rows) - 1
+		} else {
+			m.cursorRow = 0
+		}
+	}
+	m.scrollRow = 0
+	m.colWidths = calculateColWidths(m.columns, m.rows)
 }
 
 // View renders the data view.
@@ -204,6 +297,7 @@ func (m Model) View() string {
 	border := lipgloss.Color("#444444")
 	focusBorder := lipgloss.Color("#7DC4E4")
 	selectedBg := lipgloss.Color("#313244")
+	filterColor := lipgloss.Color("#F9E2AF")
 
 	var b strings.Builder
 
@@ -213,6 +307,27 @@ func (m Model) View() string {
 		b.WriteString(headerStyle.Render(fmt.Sprintf(" Data View: '%s' table", m.tableName)))
 	} else {
 		b.WriteString(headerStyle.Render(" Data View"))
+	}
+	b.WriteString("\n")
+
+	// Filter bar (always visible)
+	if m.filterActive {
+		b.WriteString(m.filterInput.View())
+	} else if m.filterText != "" {
+		f := ParseFilter(m.filterText)
+		filterDisplay := ""
+		if f.Column != "" {
+			filterDisplay = fmt.Sprintf("[%s | %s]", f.Column, f.Value)
+		} else {
+			filterDisplay = fmt.Sprintf("[%s]", f.Value)
+		}
+		filterStyle := lipgloss.NewStyle().Foreground(filterColor)
+		labelStyle := lipgloss.NewStyle().Foreground(subtle)
+		b.WriteString(labelStyle.Render(" Filter: ") + filterStyle.Render(filterDisplay))
+		matchInfo := fmt.Sprintf("  %d/%d", len(m.rows), len(m.allRows))
+		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(matchInfo))
+	} else {
+		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(" / to filter"))
 	}
 	b.WriteString("\n")
 
@@ -237,18 +352,22 @@ func (m Model) View() string {
 	b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(strings.Join(sepParts, "┼")))
 	b.WriteString("\n")
 
-	// Data rows
-	viewRows := m.viewportRows()
-	endRow := m.scrollRow + viewRows
-	if endRow > len(m.rows) {
-		endRow = len(m.rows)
-	}
+	if len(m.rows) == 0 && m.filterText != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render("  No matching rows"))
+	} else {
+		// Data rows
+		viewRows := m.viewportRows()
+		endRow := m.scrollRow + viewRows
+		if endRow > len(m.rows) {
+			endRow = len(m.rows)
+		}
 
-	for i := m.scrollRow; i < endRow; i++ {
-		line := m.renderRow(m.rows[i], visibleCols, i, selectedBg, highlight, false)
-		b.WriteString(line)
-		if i < endRow-1 {
-			b.WriteString("\n")
+		for i := m.scrollRow; i < endRow; i++ {
+			line := m.renderRow(m.rows[i], visibleCols, i, selectedBg, highlight, false)
+			b.WriteString(line)
+			if i < endRow-1 {
+				b.WriteString("\n")
+			}
 		}
 	}
 
@@ -259,7 +378,7 @@ func (m Model) View() string {
 		totalPages = int((m.totalRows + int64(m.pageSize) - 1) / int64(m.pageSize))
 	}
 	pageInfo := fmt.Sprintf(" %d rows", len(m.rows))
-	if m.totalRows > 0 {
+	if m.totalRows > 0 && m.filterText == "" {
 		pageInfo = fmt.Sprintf(" %d/%d", m.page+1, totalPages)
 	}
 
@@ -288,7 +407,7 @@ func (m Model) renderRow(cells []string, visibleCols []int, rowIdx int, selected
 			cell = lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(cell)
 		} else if rowIdx == m.cursorRow && m.focused {
 			cell = lipgloss.NewStyle().Background(selectedBg).Bold(true).Render(cell)
-		} else if cells[ci] == "<NULL>" {
+		} else if ci < len(cells) && cells[ci] == "<NULL>" {
 			cell = lipgloss.NewStyle().Foreground(lipgloss.Color("#626262")).Italic(true).Render(cell)
 		}
 
@@ -334,8 +453,8 @@ func (m Model) visibleColumns(maxWidth int) []int {
 }
 
 func (m Model) viewportRows() int {
-	// header(1) + separator(1) + footer(1) + border(2) + header text(1)
-	rows := m.height - 7
+	// header(1) + filter(1) + col headers(1) + separator(1) + footer(1) + border(2)
+	rows := m.height - 8
 	if rows < 1 {
 		return 1
 	}
@@ -356,7 +475,6 @@ func (m *Model) adjustHorizontalScroll() {
 	if m.cursorCol < m.scrollCol {
 		m.scrollCol = m.cursorCol
 	}
-	// Simple: ensure the cursor column is visible
 	if m.cursorCol > m.scrollCol+5 {
 		m.scrollCol = m.cursorCol - 3
 	}
@@ -369,12 +487,10 @@ func calculateColWidths(columns []string, rows [][]string) []int {
 
 	widths := make([]int, len(columns))
 
-	// Start with header widths
 	for i, col := range columns {
 		widths[i] = runeWidth(col)
 	}
 
-	// Check first 50 rows for max widths
 	checkRows := len(rows)
 	if checkRows > 50 {
 		checkRows = 50
@@ -390,7 +506,6 @@ func calculateColWidths(columns []string, rows [][]string) []int {
 		}
 	}
 
-	// Clamp between min and max
 	for i := range widths {
 		if widths[i] < 6 {
 			widths[i] = 6
@@ -410,7 +525,6 @@ func truncate(s string, maxLen int) string {
 	if maxLen <= 3 {
 		return s[:maxLen]
 	}
-	// Truncate rune-aware
 	runes := []rune(s)
 	w := 0
 	for i, r := range runes {
@@ -431,7 +545,6 @@ func runeWidth(s string) int {
 }
 
 func charWidth(r rune) int {
-	// Simplified: CJK and fullwidth chars take 2 cells
 	if r >= 0x1100 &&
 		(r <= 0x115f || r == 0x2329 || r == 0x232a ||
 			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||

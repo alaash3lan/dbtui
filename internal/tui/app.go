@@ -130,6 +130,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.fetchSchemaCmd(msg.TableName),
 		)
 
+	case sidebar.SchemaRequestMsg:
+		return m, m.fetchSchemaCmd(msg.TableName)
+
 	case editor.ExecuteQueryMsg:
 		m.editor.SetRunning(true)
 		m.err = nil
