@@ -1,0 +1,22 @@
+# Binary
+dbplus
+dbplus.exe
+
+# Go
+*.test
+*.out
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (may contain credentials)
+.env
