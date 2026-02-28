@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -34,6 +35,7 @@ type Model struct {
 	db       *database.DB
 	keyMap   KeyMap
 	styles   Styles
+	theme    Theme
 	version  string
 
 	// Components
@@ -54,14 +56,16 @@ type Model struct {
 	currentTable string
 	ready        bool
 	err          error
+	showHelp     bool
 }
 
 // New creates the root model.
 func New(db *database.DB, version string) Model {
-	return Model{
+	m := Model{
 		db:           db,
 		keyMap:       DefaultKeyMap(),
 		styles:       DefaultStyles(),
+		theme:        DarkTheme(),
 		version:      version,
 		sidebar:      sidebar.New(db.DatabaseName()),
 		dataView:     dataview.New(),
@@ -71,6 +75,8 @@ func New(db *database.DB, version string) Model {
 		sidebarRatio: 0.20,
 		focused:      PaneSidebar,
 	}
+	m.applyTheme()
+	return m
 }
 
 // Init implements tea.Model.
@@ -109,6 +115,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keyMap.ShrinkSidebar):
 			m.sidebarRatio = max64(m.sidebarRatio-0.02, 0.10)
 			m.updateLayout()
+			return m, nil
+		case key.Matches(msg, m.keyMap.Help):
+			m.showHelp = !m.showHelp
+			return m, nil
+		case key.Matches(msg, m.keyMap.ToggleTheme):
+			if m.theme.Name == "dark" {
+				m.theme = LightTheme()
+			} else {
+				m.theme = DarkTheme()
+			}
+			m.applyTheme()
 			return m, nil
 		}
 
@@ -206,6 +223,19 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	// Minimum terminal size
+	if m.width < 60 || m.height < 16 {
+		return lipgloss.NewStyle().
+			Foreground(m.theme.WarningColor).
+			Bold(true).
+			Render(fmt.Sprintf("Terminal too small (%dx%d). Minimum: 60x16", m.width, m.height))
+	}
+
+	// Help overlay
+	if m.showHelp {
+		return m.renderHelp()
+	}
+
 	// Title bar
 	titleView := m.titleBar.View()
 
@@ -235,7 +265,7 @@ func (m Model) View() string {
 	if m.err != nil {
 		errStyle := lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#F38BA8")).
+			BorderForeground(m.theme.ErrorColor).
 			Width(mainWidth - 2).
 			Height(dataViewHeight - 2).
 			Padding(1)
@@ -348,6 +378,116 @@ func (m Model) fetchSchemaCmd(table string) tea.Cmd {
 		info, err := db.DescribeTable(table)
 		return SchemaInfoMsg{Info: info, Err: err}
 	}
+}
+
+func (m Model) renderHelp() string {
+	t := m.theme
+	title := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(t.WarningColor).Bold(true)
+	desc := lipgloss.NewStyle().Foreground(t.Text)
+	dim := lipgloss.NewStyle().Foreground(t.Subtle)
+
+	help := title.Render("dbplus Keyboard Shortcuts") + "\n\n"
+
+	help += title.Render("Global") + "\n"
+	help += keyStyle.Render("  Ctrl+C      ") + desc.Render("Quit") + "\n"
+	help += keyStyle.Render("  Tab         ") + desc.Render("Next pane") + "\n"
+	help += keyStyle.Render("  Shift+Tab   ") + desc.Render("Previous pane") + "\n"
+	help += keyStyle.Render("  Ctrl+Left   ") + desc.Render("Shrink sidebar") + "\n"
+	help += keyStyle.Render("  Ctrl+Right  ") + desc.Render("Grow sidebar") + "\n"
+	help += keyStyle.Render("  Ctrl+T      ") + desc.Render("Toggle dark/light theme") + "\n"
+	help += keyStyle.Render("  F1          ") + desc.Render("Toggle this help") + "\n\n"
+
+	help += title.Render("Sidebar") + "\n"
+	help += keyStyle.Render("  j/k arrows  ") + desc.Render("Navigate tables") + "\n"
+	help += keyStyle.Render("  Enter       ") + desc.Render("Select table, load data") + "\n"
+	help += keyStyle.Render("  i           ") + desc.Render("Toggle schema info") + "\n"
+	help += keyStyle.Render("  g/G         ") + desc.Render("First/last table") + "\n\n"
+
+	help += title.Render("Data View") + "\n"
+	help += keyStyle.Render("  arrows/hjkl ") + desc.Render("Scroll grid") + "\n"
+	help += keyStyle.Render("  / Ctrl+F    ") + desc.Render("Activate filter") + "\n"
+	help += keyStyle.Render("  Escape      ") + desc.Render("Clear filter") + "\n"
+	help += keyStyle.Render("  PgUp/PgDn   ") + desc.Render("Page up/down") + "\n"
+	help += keyStyle.Render("  Home/End    ") + desc.Render("First/last row") + "\n\n"
+
+	help += title.Render("Query Editor") + "\n"
+	help += keyStyle.Render("  Enter       ") + desc.Render("Execute (if ends with ;)") + "\n"
+	help += keyStyle.Render("  Ctrl+E      ") + desc.Render("Force execute") + "\n"
+	help += keyStyle.Render("  Up/Down     ") + desc.Render("Navigate history") + "\n"
+	help += keyStyle.Render("  Escape      ") + desc.Render("Clear input") + "\n\n"
+
+	help += dim.Render("Press F1 to close")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Highlight).
+		Padding(1, 2).
+		Width(50)
+
+	// Center in terminal
+	rendered := box.Render(help)
+	hPad := (m.width - lipgloss.Width(rendered)) / 2
+	vPad := (m.height - lipgloss.Height(rendered)) / 2
+	if hPad < 0 {
+		hPad = 0
+	}
+	if vPad < 0 {
+		vPad = 0
+	}
+
+	var padded string
+	for i := 0; i < vPad; i++ {
+		padded += "\n"
+	}
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		for i := 0; i < hPad; i++ {
+			padded += " "
+		}
+		padded += line + "\n"
+	}
+
+	return padded
+}
+
+func (m *Model) applyTheme() {
+	t := m.theme
+	m.sidebar.SetColors(sidebar.Colors{
+		Highlight:   t.Highlight,
+		Subtle:      t.Subtle,
+		Border:      t.Border,
+		FocusBorder: t.FocusBorder,
+		ActiveBg:    t.ActiveBg,
+	})
+	m.dataView.SetColors(dataview.Colors{
+		Highlight:    t.Highlight,
+		Subtle:       t.Subtle,
+		Border:       t.Border,
+		FocusBorder:  t.FocusBorder,
+		SelectedBg:   t.SelectedBg,
+		WarningColor: t.WarningColor,
+	})
+	m.editor.SetColors(editor.Colors{
+		Highlight:    t.Highlight,
+		Subtle:       t.Subtle,
+		Border:       t.Border,
+		FocusBorder:  t.FocusBorder,
+		ErrorColor:   t.ErrorColor,
+		SuccessColor: t.SuccessColor,
+		WarningColor: t.WarningColor,
+	})
+	m.titleBar.SetColors(titlebar.Colors{
+		Highlight:  t.Highlight,
+		Text:       t.Text,
+		Background: t.HeaderBg,
+	})
+	m.statusBar.SetColors(statusbar.Colors{
+		Highlight:  t.Highlight,
+		Text:       t.Text,
+		Background: t.HeaderBg,
+	})
+	m.styles.Error = lipgloss.NewStyle().Foreground(t.ErrorColor).Bold(true)
 }
 
 func min64(a, b float64) float64 {

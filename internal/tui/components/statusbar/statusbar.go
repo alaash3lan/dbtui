@@ -7,6 +7,22 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// Colors holds the theme colors used by the status bar.
+type Colors struct {
+	Highlight  lipgloss.Color
+	Text       lipgloss.Color
+	Background lipgloss.Color
+}
+
+// DefaultColors returns dark theme colors.
+func DefaultColors() Colors {
+	return Colors{
+		Highlight:  lipgloss.Color("#7DC4E4"),
+		Text:       lipgloss.Color("#CDD6F4"),
+		Background: lipgloss.Color("#1E1E2E"),
+	}
+}
+
 // Model represents the status bar state.
 type Model struct {
 	dbName    string
@@ -15,6 +31,7 @@ type Model struct {
 	queryTime time.Duration
 	rowCount  int
 	width     int
+	colors    Colors
 }
 
 // New creates a new status bar.
@@ -23,6 +40,7 @@ func New(dbName, user, host string) Model {
 		dbName: dbName,
 		user:   user,
 		host:   host,
+		colors: DefaultColors(),
 	}
 }
 
@@ -37,15 +55,16 @@ func (m *Model) SetWidth(width int) {
 	m.width = width
 }
 
+// SetColors updates the theme colors.
+func (m *Model) SetColors(c Colors) {
+	m.colors = c
+}
+
 // View renders the status bar.
 func (m Model) View() string {
-	keyStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#7DC4E4")).
-		Bold(true)
-
-	valStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#CDD6F4"))
-
+	c := m.colors
+	keyStyle := lipgloss.NewStyle().Foreground(c.Highlight).Bold(true)
+	valStyle := lipgloss.NewStyle().Foreground(c.Text)
 	sep := valStyle.Render(" | ")
 
 	left := keyStyle.Render("db: ") + valStyle.Render(m.dbName) +
@@ -60,7 +79,7 @@ func (m Model) View() string {
 	right := valStyle.Render("help: ") + keyStyle.Render("F1")
 
 	barStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("#1E1E2E")).
+		Background(c.Background).
 		Width(m.width)
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -78,7 +97,7 @@ func (m Model) View() string {
 
 func formatDuration(d time.Duration) string {
 	if d < time.Millisecond {
-		return fmt.Sprintf("%dμs", d.Microseconds())
+		return fmt.Sprintf("%dus", d.Microseconds())
 	}
 	if d < time.Second {
 		return fmt.Sprintf("%dms", d.Milliseconds())

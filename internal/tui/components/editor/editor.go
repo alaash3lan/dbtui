@@ -50,6 +50,30 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
+// Colors holds the theme colors used by the editor.
+type Colors struct {
+	Highlight    lipgloss.Color
+	Subtle       lipgloss.Color
+	Border       lipgloss.Color
+	FocusBorder  lipgloss.Color
+	ErrorColor   lipgloss.Color
+	SuccessColor lipgloss.Color
+	WarningColor lipgloss.Color
+}
+
+// DefaultColors returns dark theme colors.
+func DefaultColors() Colors {
+	return Colors{
+		Highlight:    lipgloss.Color("#7DC4E4"),
+		Subtle:       lipgloss.Color("#626262"),
+		Border:       lipgloss.Color("#444444"),
+		FocusBorder:  lipgloss.Color("#7DC4E4"),
+		ErrorColor:   lipgloss.Color("#F38BA8"),
+		SuccessColor: lipgloss.Color("#A6E3A1"),
+		WarningColor: lipgloss.Color("#F9E2AF"),
+	}
+}
+
 // Model represents the query editor state.
 type Model struct {
 	textarea    textarea.Model
@@ -62,6 +86,7 @@ type Model struct {
 	height      int
 	keyMap      KeyMap
 	savedInput  string // saved when navigating history
+	colors      Colors
 }
 
 // New creates a new editor model.
@@ -79,6 +104,7 @@ func New() Model {
 		textarea: ta,
 		history:  NewHistoryRing(100),
 		keyMap:   DefaultKeyMap(),
+		colors:   DefaultColors(),
 	}
 }
 
@@ -120,6 +146,11 @@ func (m *Model) SetError(err string) {
 func (m *Model) SetResult(msg string) {
 	m.lastResult = msg
 	m.lastError = ""
+}
+
+// SetColors updates the theme colors.
+func (m *Model) SetColors(c Colors) {
+	m.colors = c
 }
 
 // ClearStatus clears error and result messages.
@@ -240,12 +271,13 @@ func (m Model) View() string {
 		contentWidth = 1
 	}
 
-	highlight := lipgloss.Color("#7DC4E4")
-	subtle := lipgloss.Color("#626262")
-	border := lipgloss.Color("#444444")
-	focusBorder := lipgloss.Color("#7DC4E4")
-	errColor := lipgloss.Color("#F38BA8")
-	successColor := lipgloss.Color("#A6E3A1")
+	c := m.colors
+	highlight := c.Highlight
+	subtle := c.Subtle
+	border := c.Border
+	focusBorder := c.FocusBorder
+	errColor := c.ErrorColor
+	successColor := c.SuccessColor
 
 	var b strings.Builder
 

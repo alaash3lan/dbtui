@@ -21,6 +21,26 @@ type SchemaRequestMsg struct {
 	TableName string
 }
 
+// Colors holds the theme colors used by the sidebar.
+type Colors struct {
+	Highlight   lipgloss.Color
+	Subtle      lipgloss.Color
+	Border      lipgloss.Color
+	FocusBorder lipgloss.Color
+	ActiveBg    lipgloss.Color
+}
+
+// DefaultColors returns dark theme colors.
+func DefaultColors() Colors {
+	return Colors{
+		Highlight:   lipgloss.Color("#7DC4E4"),
+		Subtle:      lipgloss.Color("#626262"),
+		Border:      lipgloss.Color("#444444"),
+		FocusBorder: lipgloss.Color("#7DC4E4"),
+		ActiveBg:    lipgloss.Color("#313244"),
+	}
+}
+
 // KeyMap defines sidebar-specific keybindings.
 type KeyMap struct {
 	Up     key.Binding
@@ -72,49 +92,15 @@ type Model struct {
 	keyMap     KeyMap
 	schemaInfo *database.SchemaInfo
 	showSchema bool
-	styles     modelStyles
-}
-
-type modelStyles struct {
-	header  lipgloss.Style
-	item    lipgloss.Style
-	active  lipgloss.Style
-	dimmed  lipgloss.Style
-	border  lipgloss.Style
-	focused lipgloss.Style
+	colors     Colors
 }
 
 // New creates a new sidebar model.
 func New(dbName string) Model {
-	highlight := lipgloss.Color("#7DC4E4")
-	subtle := lipgloss.Color("#626262")
-	border := lipgloss.Color("#444444")
-	focusBorder := lipgloss.Color("#7DC4E4")
-	activeBg := lipgloss.Color("#313244")
-
 	return Model{
 		dbName: dbName,
 		keyMap: DefaultKeyMap(),
-		styles: modelStyles{
-			header: lipgloss.NewStyle().
-				Foreground(highlight).
-				Bold(true),
-			item: lipgloss.NewStyle().
-				PaddingLeft(1),
-			active: lipgloss.NewStyle().
-				Background(activeBg).
-				Foreground(highlight).
-				Bold(true).
-				PaddingLeft(1),
-			dimmed: lipgloss.NewStyle().
-				Foreground(subtle),
-			border: lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(border),
-			focused: lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(focusBorder),
-		},
+		colors: DefaultColors(),
 	}
 }
 
@@ -122,7 +108,7 @@ func New(dbName string) Model {
 func (m *Model) SetTables(tables []database.TableInfo) {
 	m.tables = tables
 	if m.cursor >= len(tables) {
-		m.cursor = max(0, len(tables)-1)
+		m.cursor = maxInt(0, len(tables)-1)
 	}
 }
 
@@ -140,6 +126,11 @@ func (m *Model) SetFocused(focused bool) {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
+}
+
+// SetColors updates the theme colors.
+func (m *Model) SetColors(c Colors) {
+	m.colors = c
 }
 
 // SelectedTable returns the currently highlighted table name.
@@ -202,36 +193,36 @@ func (m Model) View() string {
 		return ""
 	}
 
-	contentWidth := m.width - 2 // account for border
+	c := m.colors
+	contentWidth := m.width - 2
 	if contentWidth < 1 {
 		contentWidth = 1
 	}
 
+	headerStyle := lipgloss.NewStyle().Foreground(c.Highlight).Bold(true)
+	dimmedStyle := lipgloss.NewStyle().Foreground(c.Subtle)
+	itemStyle := lipgloss.NewStyle().PaddingLeft(1)
+	activeStyle := lipgloss.NewStyle().Background(c.ActiveBg).Foreground(c.Highlight).Bold(true).PaddingLeft(1)
+
 	var b strings.Builder
 
-	// Database name header
-	header := m.styles.header.Width(contentWidth).Render(fmt.Sprintf(" %s", m.dbName))
-	b.WriteString(header)
+	b.WriteString(headerStyle.Width(contentWidth).Render(fmt.Sprintf(" %s", m.dbName)))
 	b.WriteString("\n")
-
-	// Tables section header
-	b.WriteString(m.styles.dimmed.Width(contentWidth).Render(" Tables"))
+	b.WriteString(dimmedStyle.Width(contentWidth).Render(" Tables"))
 	b.WriteString("\n")
 
 	if len(m.tables) == 0 {
-		b.WriteString(m.styles.dimmed.Render(" No tables found"))
+		b.WriteString(dimmedStyle.Render(" No tables found"))
 	} else {
-		// Calculate visible area for table list
 		schemaHeight := 0
 		if m.showSchema && m.schemaInfo != nil {
 			schemaHeight = len(m.schemaInfo.Columns) + 5
 		}
-		visibleHeight := m.height - 4 - schemaHeight // header + section header + borders + padding
+		visibleHeight := m.height - 4 - schemaHeight
 		if visibleHeight < 1 {
 			visibleHeight = 1
 		}
 
-		// Scrolling window
 		start := 0
 		if m.cursor >= visibleHeight {
 			start = m.cursor - visibleHeight + 1
@@ -244,9 +235,9 @@ func (m Model) View() string {
 		for i := start; i < end; i++ {
 			name := truncate(m.tables[i].Name, contentWidth-2)
 			if i == m.cursor {
-				b.WriteString(m.styles.active.Width(contentWidth).Render(fmt.Sprintf("> %s", name)))
+				b.WriteString(activeStyle.Width(contentWidth).Render(fmt.Sprintf("> %s", name)))
 			} else {
-				b.WriteString(m.styles.item.Width(contentWidth).Render(fmt.Sprintf("  %s", name)))
+				b.WriteString(itemStyle.Width(contentWidth).Render(fmt.Sprintf("  %s", name)))
 			}
 			if i < end-1 {
 				b.WriteString("\n")
@@ -254,37 +245,37 @@ func (m Model) View() string {
 		}
 	}
 
-	// Schema info section
 	if m.showSchema && m.schemaInfo != nil {
 		b.WriteString("\n\n")
-		b.WriteString(m.styles.dimmed.Width(contentWidth).Render(" Schema Info"))
+		b.WriteString(dimmedStyle.Width(contentWidth).Render(" Schema Info"))
 		b.WriteString("\n")
-		b.WriteString(m.styles.item.Render(fmt.Sprintf(" engine: %s", m.schemaInfo.Engine)))
+		b.WriteString(itemStyle.Render(fmt.Sprintf(" engine: %s", m.schemaInfo.Engine)))
 		b.WriteString("\n")
-		b.WriteString(m.styles.item.Render(fmt.Sprintf(" rows: %d", m.schemaInfo.RowCount)))
+		b.WriteString(itemStyle.Render(fmt.Sprintf(" rows: %d", m.schemaInfo.RowCount)))
 		b.WriteString("\n")
-		b.WriteString(m.styles.item.Render(fmt.Sprintf(" charset: %s", m.schemaInfo.Charset)))
+		b.WriteString(itemStyle.Render(fmt.Sprintf(" charset: %s", m.schemaInfo.Charset)))
 		for _, col := range m.schemaInfo.Columns {
 			keyMark := ""
 			if col.Key == "PRI" {
 				keyMark = " PK"
 			}
 			b.WriteString("\n")
-			b.WriteString(m.styles.dimmed.Render(fmt.Sprintf("  %s %s%s", col.Name, col.Type, keyMark)))
+			b.WriteString(dimmedStyle.Render(fmt.Sprintf("  %s %s%s", col.Name, col.Type, keyMark)))
 		}
 	}
 
 	content := b.String()
 
-	// Apply border style
-	style := m.styles.border
+	borderStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(c.Border)
 	if m.focused {
-		style = m.styles.focused
+		borderStyle = borderStyle.BorderForeground(c.FocusBorder)
 	}
 
-	return style.
+	return borderStyle.
 		Width(contentWidth).
-		Height(m.height - 2). // account for border
+		Height(m.height - 2).
 		Render(content)
 }
 
@@ -298,7 +289,7 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-func max(a, b int) int {
+func maxInt(a, b int) int {
 	if a > b {
 		return a
 	}

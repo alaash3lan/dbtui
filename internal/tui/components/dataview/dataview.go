@@ -70,6 +70,28 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
+// Colors holds the theme colors used by the data view.
+type Colors struct {
+	Highlight    lipgloss.Color
+	Subtle       lipgloss.Color
+	Border       lipgloss.Color
+	FocusBorder  lipgloss.Color
+	SelectedBg   lipgloss.Color
+	WarningColor lipgloss.Color
+}
+
+// DefaultColors returns dark theme colors.
+func DefaultColors() Colors {
+	return Colors{
+		Highlight:    lipgloss.Color("#7DC4E4"),
+		Subtle:       lipgloss.Color("#626262"),
+		Border:       lipgloss.Color("#444444"),
+		FocusBorder:  lipgloss.Color("#7DC4E4"),
+		SelectedBg:   lipgloss.Color("#313244"),
+		WarningColor: lipgloss.Color("#F9E2AF"),
+	}
+}
+
 // Model represents the data viewer state.
 type Model struct {
 	columns      []string
@@ -96,6 +118,7 @@ type Model struct {
 	width      int
 	height     int
 	keyMap     KeyMap
+	colors     Colors
 }
 
 // New creates a new data view model.
@@ -109,6 +132,7 @@ func New() Model {
 		pageSize:    100,
 		keyMap:      DefaultKeyMap(),
 		filterInput: fi,
+		colors:      DefaultColors(),
 	}
 }
 
@@ -145,6 +169,11 @@ func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.filterInput.Width = width - 14 // account for prompt + border
+}
+
+// SetColors updates the theme colors.
+func (m *Model) SetColors(c Colors) {
+	m.colors = c
 }
 
 // PageSize returns the configured page size.
@@ -292,12 +321,13 @@ func (m Model) View() string {
 		contentWidth = 1
 	}
 
-	highlight := lipgloss.Color("#7DC4E4")
-	subtle := lipgloss.Color("#626262")
-	border := lipgloss.Color("#444444")
-	focusBorder := lipgloss.Color("#7DC4E4")
-	selectedBg := lipgloss.Color("#313244")
-	filterColor := lipgloss.Color("#F9E2AF")
+	c := m.colors
+	highlight := c.Highlight
+	subtle := c.Subtle
+	border := c.Border
+	focusBorder := c.FocusBorder
+	selectedBg := c.SelectedBg
+	filterColor := c.WarningColor
 
 	var b strings.Builder
 
@@ -408,14 +438,14 @@ func (m Model) renderRow(cells []string, visibleCols []int, rowIdx int, selected
 		} else if rowIdx == m.cursorRow && m.focused {
 			cell = lipgloss.NewStyle().Background(selectedBg).Bold(true).Render(cell)
 		} else if ci < len(cells) && cells[ci] == "<NULL>" {
-			cell = lipgloss.NewStyle().Foreground(lipgloss.Color("#626262")).Italic(true).Render(cell)
+			cell = lipgloss.NewStyle().Foreground(m.colors.Subtle).Italic(true).Render(cell)
 		}
 
 		parts = append(parts, cell)
 	}
 	sep := "│"
 	if !isHeader {
-		sep = lipgloss.NewStyle().Foreground(lipgloss.Color("#444444")).Render("│")
+		sep = lipgloss.NewStyle().Foreground(m.colors.Border).Render("│")
 	}
 	return strings.Join(parts, sep)
 }
