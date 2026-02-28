@@ -9,6 +9,7 @@ import (
 
 	"github.com/alaa/dbplus/internal/database"
 	"github.com/alaa/dbplus/internal/tui/components/dataview"
+	"github.com/alaa/dbplus/internal/tui/components/editor"
 	"github.com/alaa/dbplus/internal/tui/components/sidebar"
 	"github.com/alaa/dbplus/internal/tui/components/statusbar"
 	"github.com/alaa/dbplus/internal/tui/components/titlebar"
@@ -23,7 +24,10 @@ const (
 	PaneQueryEditor
 )
 
-const totalPanes = 2 // sidebar + dataview (editor added in Sprint 4)
+const totalPanes = 3
+
+// editorHeightRatio is the fraction of the right pane given to the editor.
+const editorHeightRatio = 0.30
 
 // Model is the root Bubble Tea model.
 type Model struct {
@@ -35,6 +39,7 @@ type Model struct {
 	// Components
 	sidebar   sidebar.Model
 	dataView  dataview.Model
+	editor    editor.Model
 	titleBar  titlebar.Model
 	statusBar statusbar.Model
 
@@ -60,6 +65,7 @@ func New(db *database.DB, version string) Model {
 		version:      version,
 		sidebar:      sidebar.New(db.DatabaseName()),
 		dataView:     dataview.New(),
+		editor:       editor.New(),
 		titleBar:     titlebar.New(version),
 		statusBar:    statusbar.New(db.DatabaseName(), db.User(), db.Host()),
 		sidebarRatio: 0.20,
@@ -116,21 +122,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sidebar.TableSelectedMsg:
 		m.currentTable = msg.TableName
+		m.err = nil
+		m.editor.ClearStatus()
 		return m, tea.Batch(
 			m.fetchTableDataCmd(msg.TableName),
 			m.fetchCountCmd(msg.TableName),
 			m.fetchSchemaCmd(msg.TableName),
 		)
 
+	case editor.ExecuteQueryMsg:
+		m.editor.SetRunning(true)
+		m.err = nil
+		return m, m.executeQueryCmd(msg.SQL)
+
 	case QueryResultMsg:
+		m.editor.SetRunning(false)
 		if msg.Err != nil {
-			m.err = msg.Err
+			m.editor.SetError(msg.Err.Error())
 			return m, nil
 		}
 		m.err = nil
-		m.dataView.SetData(m.currentTable, msg.Columns, msg.Rows)
-		m.titleBar.SetRowCount(msg.RowCount)
-		m.statusBar.SetQueryInfo(msg.Duration, msg.RowCount)
+		if msg.IsSelect {
+			tableName := m.currentTable
+			if tableName == "" {
+				tableName = "query"
+			}
+			m.dataView.SetData(tableName, msg.Columns, msg.Rows)
+			m.titleBar.SetRowCount(msg.RowCount)
+			m.statusBar.SetQueryInfo(msg.Duration, msg.RowCount)
+			m.editor.SetResult(fmt.Sprintf("%d rows in %s", msg.RowCount, msg.Duration))
+		} else {
+			m.editor.SetResult(fmt.Sprintf("%d rows affected in %s", msg.AffectedRows, msg.Duration))
+			m.statusBar.SetQueryInfo(msg.Duration, int(msg.AffectedRows))
+			// Refresh current table data if we had one selected
+			if m.currentTable != "" {
+				return m, tea.Batch(
+					m.fetchTableDataCmd(m.currentTable),
+					m.fetchCountCmd(m.currentTable),
+				)
+			}
+		}
 
 	case tableCountMsg:
 		m.dataView.SetPage(0, msg.count)
@@ -152,6 +183,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PaneDataView:
 		var cmd tea.Cmd
 		m.dataView, cmd = m.dataView.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case PaneQueryEditor:
+		var cmd tea.Cmd
+		m.editor, cmd = m.editor.Update(msg)
 		if cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -180,7 +217,16 @@ func (m Model) View() string {
 	mainWidth := m.width - sidebarWidth
 
 	sidebarView := m.sidebar.View()
+
+	// Right pane: DataView (top) + Editor (bottom)
+	editorHeight := int(float64(availHeight) * editorHeightRatio)
+	if editorHeight < 6 {
+		editorHeight = 6
+	}
+	dataViewHeight := availHeight - editorHeight
+
 	dataViewView := m.dataView.View()
+	editorView := m.editor.View()
 
 	// Error overlay in data area
 	if m.err != nil {
@@ -188,15 +234,17 @@ func (m Model) View() string {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("#F38BA8")).
 			Width(mainWidth - 2).
-			Height(availHeight - 2).
+			Height(dataViewHeight - 2).
 			Padding(1)
 		dataViewView = errStyle.Render(
 			m.styles.Error.Render(fmt.Sprintf("Error: %v", m.err)),
 		)
 	}
 
+	rightPane := lipgloss.JoinVertical(lipgloss.Left, dataViewView, editorView)
+
 	// Compose layout
-	middleRow := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, dataViewView)
+	middleRow := lipgloss.JoinHorizontal(lipgloss.Top, sidebarView, rightPane)
 
 	return lipgloss.JoinVertical(lipgloss.Left, titleView, middleRow, statusView)
 }
@@ -206,8 +254,15 @@ func (m *Model) updateLayout() {
 	mainWidth := m.width - sidebarWidth
 	availHeight := m.height - 2
 
+	editorHeight := int(float64(availHeight) * editorHeightRatio)
+	if editorHeight < 6 {
+		editorHeight = 6
+	}
+	dataViewHeight := availHeight - editorHeight
+
 	m.sidebar.SetSize(sidebarWidth, availHeight)
-	m.dataView.SetSize(mainWidth, availHeight)
+	m.dataView.SetSize(mainWidth, dataViewHeight)
+	m.editor.SetSize(mainWidth, editorHeight)
 	m.updateFocus()
 	m.titleBar.SetWidth(m.width)
 	m.statusBar.SetWidth(m.width)
@@ -216,6 +271,7 @@ func (m *Model) updateLayout() {
 func (m *Model) updateFocus() {
 	m.sidebar.SetFocused(m.focused == PaneSidebar)
 	m.dataView.SetFocused(m.focused == PaneDataView)
+	m.editor.SetFocused(m.focused == PaneQueryEditor)
 }
 
 func (m *Model) cycleFocus(dir int) {
@@ -246,6 +302,24 @@ func (m Model) fetchTableDataCmd(table string) tea.Cmd {
 			RowCount: result.RowCount,
 			Duration: result.Duration,
 			IsSelect: true,
+		}
+	}
+}
+
+func (m Model) executeQueryCmd(sql string) tea.Cmd {
+	db := m.db
+	return func() tea.Msg {
+		result, err := db.Execute(sql)
+		if err != nil {
+			return QueryResultMsg{Err: err}
+		}
+		return QueryResultMsg{
+			Columns:      result.Columns,
+			Rows:         result.Rows,
+			RowCount:     result.RowCount,
+			AffectedRows: result.AffectedRows,
+			Duration:     result.Duration,
+			IsSelect:     result.IsSelect,
 		}
 	}
 }
