@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/alaa/dbplus/cmd"
 	"github.com/alaa/dbplus/internal/database"
+	"github.com/alaa/dbplus/internal/tui"
 )
 
 func main() {
@@ -23,12 +26,11 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Printf("Connected to %s@%s", cfg.User, cfg.Host)
-	if cfg.Database != "" {
-		fmt.Printf("/%s", cfg.Database)
-	}
-	fmt.Println()
+	model := tui.New(db, cmd.Version())
+	p := tea.NewProgram(model, tea.WithAltScreen())
 
-	// TUI will be launched here in Sprint 2
-	_ = db
+	if _, err := p.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
+		os.Exit(1)
+	}
 }
