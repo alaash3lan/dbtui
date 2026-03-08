@@ -16,6 +16,8 @@ type KeyMap struct {
 	ExportJSON    key.Binding
 	ExplainQuery  key.Binding
 	SwitchDB      key.Binding
+	Bookmarks     key.Binding
+	SaveBookmark  key.Binding
 }
 
 // DefaultKeyMap returns the default set of keybindings.
@@ -68,6 +70,14 @@ func DefaultKeyMap() KeyMap {
 		SwitchDB: key.NewBinding(
 			key.WithKeys("ctrl+d"),
 			key.WithHelp("ctrl+d", "switch database"),
+		),
+		Bookmarks: key.NewBinding(
+			key.WithKeys("ctrl+b"),
+			key.WithHelp("ctrl+b", "bookmarks"),
+		),
+		SaveBookmark: key.NewBinding(
+			key.WithKeys("ctrl+k"),
+			key.WithHelp("ctrl+k", "save bookmark"),
 		),
 	}
 }

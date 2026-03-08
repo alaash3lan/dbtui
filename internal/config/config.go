@@ -134,3 +134,128 @@ func defaultHistoryPath() string {
 	}
 	return filepath.Join(home, ".config", "dbtui", "history")
 }
+
+// SavedQuery holds a named SQL bookmark.
+type SavedQuery struct {
+	Name string `toml:"name"`
+	SQL  string `toml:"sql"`
+}
+
+// BookmarksConfig holds all saved query bookmarks.
+type BookmarksConfig struct {
+	Bookmarks []SavedQuery `toml:"bookmarks"`
+}
+
+// LoadBookmarks reads bookmarks from ~/.config/dbtui/bookmarks.toml.
+func LoadBookmarks() *BookmarksConfig {
+	cfg := &BookmarksConfig{}
+
+	path := bookmarksPath()
+	if path == "" {
+		return cfg
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		return cfg
+	}
+
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse bookmarks %s: %v\n", path, err)
+	}
+	return cfg
+}
+
+// SaveBookmarks writes bookmarks back to ~/.config/dbtui/bookmarks.toml.
+func SaveBookmarks(cfg *BookmarksConfig) error {
+	path := bookmarksPath()
+	if path == "" {
+		return fmt.Errorf("cannot determine bookmarks path")
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create bookmarks file: %w", err)
+	}
+	defer f.Close()
+
+	enc := toml.NewEncoder(f)
+	return enc.Encode(cfg)
+}
+
+func bookmarksPath() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "dbtui", "bookmarks.toml")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "dbtui", "bookmarks.toml")
+}
+
+// FavoritesConfig holds per-database table favorites.
+type FavoritesConfig struct {
+	Favorites map[string][]string `toml:"favorites"`
+}
+
+// LoadFavorites reads favorites from ~/.config/dbtui/favorites.toml.
+func LoadFavorites() *FavoritesConfig {
+	cfg := &FavoritesConfig{
+		Favorites: make(map[string][]string),
+	}
+
+	path := favoritesPath()
+	if path == "" {
+		return cfg
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		return cfg
+	}
+
+	if _, err := toml.DecodeFile(path, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse favorites %s: %v\n", path, err)
+	}
+	if cfg.Favorites == nil {
+		cfg.Favorites = make(map[string][]string)
+	}
+	return cfg
+}
+
+// SaveFavorites writes favorites to ~/.config/dbtui/favorites.toml.
+func SaveFavorites(cfg *FavoritesConfig) error {
+	path := favoritesPath()
+	if path == "" {
+		return fmt.Errorf("unable to determine favorites path")
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create config dir: %w", err)
+	}
+
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create favorites file: %w", err)
+	}
+	defer f.Close()
+
+	enc := toml.NewEncoder(f)
+	return enc.Encode(cfg)
+}
+
+func favoritesPath() string {
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "dbtui", "favorites.toml")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "dbtui", "favorites.toml")
+}

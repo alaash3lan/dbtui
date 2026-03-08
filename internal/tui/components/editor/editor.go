@@ -81,6 +81,10 @@ type Model struct {
 	colors      Colors
 	saveToFile  bool
 	historyFile string
+
+	// Autocomplete
+	tableNames []string
+	completion completionState
 }
 
 // New creates a new editor model.
@@ -175,6 +179,17 @@ func (m Model) Value() string {
 	return m.textarea.Value()
 }
 
+// SetValue sets the textarea content (e.g. for loading bookmarks).
+func (m *Model) SetValue(sql string) {
+	m.textarea.SetValue(sql)
+	m.textarea.CursorEnd()
+}
+
+// SetTableNames updates the table name list used for autocomplete.
+func (m *Model) SetTableNames(names []string) {
+	m.tableNames = names
+}
+
 // ClearStatus clears error and result messages.
 func (m *Model) ClearStatus() {
 	m.lastError = ""
@@ -194,6 +209,16 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// Ctrl+Space for autocomplete (Ctrl+Space = KeyCtrlAt in terminals)
+		if msg.Type == tea.KeyCtrlAt {
+			return m.handleTab()
+		}
+
+		// Any other key resets completion state
+		if m.completion.active {
+			m.completion.reset()
+		}
+
 		switch {
 		case key.Matches(msg, m.keyMap.Clear):
 			m.textarea.SetValue("")
@@ -254,6 +279,36 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+func (m Model) handleTab() (Model, tea.Cmd) {
+	text := m.textarea.Value()
+
+	// Get cursor position: textarea gives us the line index;
+	// since SetValue + CursorEnd places cursor at end of text,
+	// we work with the full text up to the end (typical usage is cursor at end).
+	// For simplicity, complete from end of the current text.
+	cursorPos := len(text)
+
+	if !m.completion.active {
+		m.completion = buildCompletions(text, cursorPos, m.tableNames)
+		if !m.completion.active {
+			return m, nil
+		}
+	} else {
+		m.completion.next()
+	}
+
+	match := m.completion.current()
+	if match == "" {
+		return m, nil
+	}
+
+	newText := text[:m.completion.prefixStart] + match + text[m.completion.prefixStart+len(m.completion.prefix):]
+	m.textarea.SetValue(newText)
+	m.textarea.CursorEnd()
+
+	return m, nil
+}
+
 func (m Model) execute() (Model, tea.Cmd) {
 	val := strings.TrimSpace(m.textarea.Value())
 	if val == "" {
@@ -309,17 +364,18 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n")
 
-	// Textarea: show highlighted SQL when unfocused, plain textarea when focused
-	if m.focused {
-		b.WriteString(m.textarea.View())
-	} else {
-		val := m.textarea.Value()
-		if val == "" {
-			b.WriteString(m.textarea.View())
-		} else {
-			highlighted := highlightSQL(val, c.KeywordColor, c.StringColor, c.NumberColor)
-			b.WriteString(highlighted)
+	// Show syntax-highlighted SQL when there's content; use plain textarea
+	// when empty (to show placeholder) or when focused (to preserve cursor).
+	val := m.textarea.Value()
+	if val == "" || m.focused {
+		// Render the textarea view, then apply highlighting to its output
+		taView := m.textarea.View()
+		if val != "" {
+			taView = highlightRenderedSQL(taView, c.KeywordColor, c.StringColor, c.NumberColor)
 		}
+		b.WriteString(taView)
+	} else {
+		b.WriteString(highlightSQL(val, c.KeywordColor, c.StringColor, c.NumberColor))
 	}
 
 	// Status line (error or result)
@@ -331,8 +387,30 @@ func (m Model) View() string {
 		b.WriteString(lipgloss.NewStyle().Foreground(successColor).Render(m.lastResult))
 	}
 
+	// Completion hint
+	if m.completion.active && len(m.completion.matches) > 1 {
+		compStyle := lipgloss.NewStyle().Foreground(highlight)
+		compDim := lipgloss.NewStyle().Foreground(subtle)
+		b.WriteString("\n")
+		b.WriteString(compDim.Render("Ctrl+Space: "))
+		for i, match := range m.completion.matches {
+			if i > 5 {
+				b.WriteString(compDim.Render(fmt.Sprintf(" +%d more", len(m.completion.matches)-i)))
+				break
+			}
+			if i == m.completion.index {
+				b.WriteString(compStyle.Render(match))
+			} else {
+				b.WriteString(compDim.Render(match))
+			}
+			if i < len(m.completion.matches)-1 && i < 5 {
+				b.WriteString(compDim.Render(" | "))
+			}
+		}
+	}
+
 	// History indicator
-	if m.history.Len() > 0 {
+	if m.history.Len() > 0 && !m.completion.active {
 		histInfo := fmt.Sprintf("history: %d", m.history.Len())
 		b.WriteString("\n")
 		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(histInfo))

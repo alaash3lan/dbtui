@@ -172,6 +172,41 @@ func formatValue(val interface{}, colTypes []*sql.ColumnType, idx int) string {
 	}
 }
 
+// DeleteRow deletes a row identified by primary key columns and values.
+// It uses parameterized queries to prevent SQL injection.
+func (db *DB) DeleteRow(ctx context.Context, table string, pkColumns []string, pkValues []string) (int64, error) {
+	if err := validIdentifier(table); err != nil {
+		return 0, err
+	}
+	if len(pkColumns) == 0 {
+		return 0, fmt.Errorf("no primary key columns provided")
+	}
+	if len(pkColumns) != len(pkValues) {
+		return 0, fmt.Errorf("primary key columns and values count mismatch")
+	}
+
+	var conditions []string
+	args := make([]interface{}, len(pkValues))
+	for i, col := range pkColumns {
+		if err := validIdentifier(col); err != nil {
+			return 0, err
+		}
+		conditions = append(conditions, fmt.Sprintf("`%s` = ?", col))
+		args[i] = pkValues[i]
+	}
+
+	query := fmt.Sprintf("DELETE FROM `%s` WHERE %s", table, strings.Join(conditions, " AND "))
+
+	start := time.Now()
+	res, err := db.conn.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	_ = time.Since(start)
+
+	return res.RowsAffected()
+}
+
 func isPrintable(b []byte) bool {
 	for _, c := range b {
 		if c < 32 && c != '\n' && c != '\r' && c != '\t' {

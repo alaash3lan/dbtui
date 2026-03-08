@@ -2,6 +2,8 @@ package dataview
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -9,8 +11,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alaa/dbtui/internal/database"
 	"github.com/alaa/dbtui/internal/stringutil"
 )
+
+// DeleteRowRequestMsg is emitted when the user requests to delete the current row.
+type DeleteRowRequestMsg struct {
+	Table      string
+	PKColumns  []string
+	PKValues   []string
+	RowPreview string
+}
 
 // PageRequestMsg is emitted when the user navigates past the loaded page.
 type PageRequestMsg struct {
@@ -39,9 +50,12 @@ type KeyMap struct {
 	ClearFilter key.Binding
 	NextPage    key.Binding
 	PrevPage    key.Binding
-	CopyCell    key.Binding
-	CopyRow     key.Binding
-	Detail      key.Binding
+	CopyCell         key.Binding
+	CopyRow          key.Binding
+	Detail           key.Binding
+	Sort             key.Binding
+	ToggleRowNumbers key.Binding
+	DeleteRow        key.Binding
 }
 
 // DefaultKeyMap returns dataview key bindings.
@@ -107,6 +121,18 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("d"),
 			key.WithHelp("d", "row detail"),
 		),
+		Sort: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "sort column"),
+		),
+		ToggleRowNumbers: key.NewBinding(
+			key.WithKeys("ctrl+n"),
+			key.WithHelp("ctrl+n", "toggle row numbers"),
+		),
+		DeleteRow: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "delete row"),
+		),
 	}
 }
 
@@ -138,9 +164,18 @@ type Model struct {
 	filterActive bool // true when typing in filter
 	filterText   string
 
+	// Sorting
+	sortCol int // -1 = no sort
+	sortDir int // 0=none, 1=asc, 2=desc
+
+	// Row numbers
+	showRowNumbers bool
+
 	// Row detail mode
 	detailMode   bool
 	detailScroll int
+
+	schemaInfo *database.SchemaInfo
 
 	tableName  string
 	page       int
@@ -165,9 +200,11 @@ func New(pageSize int) Model {
 	}
 
 	return Model{
-		pageSize:    pageSize,
-		keyMap:      DefaultKeyMap(),
-		filterInput: fi,
+		pageSize:       pageSize,
+		keyMap:         DefaultKeyMap(),
+		filterInput:    fi,
+		sortCol:        -1,
+		showRowNumbers: true,
 	}
 }
 
@@ -181,7 +218,9 @@ func (m *Model) SetData(tableName string, columns []string, rows [][]string) {
 	m.cursorCol = 0
 	m.scrollRow = 0
 	m.scrollCol = 0
-	m.applyFilter()
+	m.sortCol = -1
+	m.sortDir = 0
+	m.applySortAndFilter()
 	m.colWidths = calculateColWidths(columns, m.rows)
 }
 
@@ -214,6 +253,11 @@ func (m *Model) SetTotalRows(totalRows int64) {
 // SetPageDirect sets the page without changing totalRows.
 func (m *Model) SetPageDirect(page int) {
 	m.page = page
+}
+
+// SetSchemaInfo stores the table schema for primary key resolution.
+func (m *Model) SetSchemaInfo(info *database.SchemaInfo) {
+	m.schemaInfo = info
 }
 
 // Columns returns the current column names.
@@ -462,6 +506,72 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.detailMode = true
 				m.detailScroll = 0
 			}
+		case key.Matches(msg, m.keyMap.Sort):
+			if len(m.columns) > 0 {
+				if m.sortCol == m.cursorCol {
+					// Cycle: none -> asc -> desc -> none
+					m.sortDir = (m.sortDir + 1) % 3
+					if m.sortDir == 0 {
+						m.sortCol = -1
+					}
+				} else {
+					m.sortCol = m.cursorCol
+					m.sortDir = 1
+				}
+				m.applySortAndFilter()
+			}
+		case key.Matches(msg, m.keyMap.ToggleRowNumbers):
+			m.showRowNumbers = !m.showRowNumbers
+		case key.Matches(msg, m.keyMap.DeleteRow):
+			if len(m.rows) == 0 || m.cursorRow < 0 || m.cursorRow >= len(m.rows) {
+				return m, nil
+			}
+			if m.schemaInfo == nil || m.tableName == "" {
+				return m, nil
+			}
+			// Find primary key columns
+			var pkCols []string
+			for _, col := range m.schemaInfo.Columns {
+				if col.Key == "PRI" {
+					pkCols = append(pkCols, col.Name)
+				}
+			}
+			if len(pkCols) == 0 {
+				return m, nil
+			}
+			// Resolve PK values from the current row
+			row := m.rows[m.cursorRow]
+			var pkValues []string
+			for _, pkCol := range pkCols {
+				found := false
+				for ci, colName := range m.columns {
+					if colName == pkCol && ci < len(row) {
+						pkValues = append(pkValues, row[ci])
+						found = true
+						break
+					}
+				}
+				if !found {
+					return m, nil
+				}
+			}
+			// Build row preview
+			var preview []string
+			for ci, colName := range m.columns {
+				if ci < len(row) {
+					preview = append(preview, fmt.Sprintf("%s: %s", colName, row[ci]))
+				}
+			}
+			tableName := m.tableName
+			rowPreview := strings.Join(preview, "\n")
+			return m, func() tea.Msg {
+				return DeleteRowRequestMsg{
+					Table:      tableName,
+					PKColumns:  pkCols,
+					PKValues:   pkValues,
+					RowPreview: rowPreview,
+				}
+			}
 		}
 	}
 
@@ -469,11 +579,49 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m *Model) applyFilter() {
+	m.applySortAndFilter()
+}
+
+func (m *Model) applySortAndFilter() {
+	// Step 1: Apply filter
 	f := ParseFilter(m.filterText)
 	if f.Value == "" {
-		m.rows = m.allRows
+		m.rows = make([][]string, len(m.allRows))
+		copy(m.rows, m.allRows)
 	} else {
 		m.rows = ApplyFilter(m.columns, m.allRows, f)
+	}
+
+	// Step 2: Apply sort
+	if m.sortCol >= 0 && m.sortCol < len(m.columns) && m.sortDir > 0 {
+		asc := m.sortDir == 1
+		col := m.sortCol
+		sort.SliceStable(m.rows, func(i, j int) bool {
+			a, b := "", ""
+			if col < len(m.rows[i]) {
+				a = m.rows[i][col]
+			}
+			if col < len(m.rows[j]) {
+				b = m.rows[j][col]
+			}
+
+			// Try numeric comparison first
+			af, aErr := strconv.ParseFloat(a, 64)
+			bf, bErr := strconv.ParseFloat(b, 64)
+			if aErr == nil && bErr == nil {
+				if asc {
+					return af < bf
+				}
+				return af > bf
+			}
+
+			// Fall back to case-insensitive string comparison
+			cmp := strings.Compare(strings.ToLower(a), strings.ToLower(b))
+			if asc {
+				return cmp < 0
+			}
+			return cmp > 0
+		})
 	}
 
 	// Reset cursor if out of bounds
@@ -549,16 +697,32 @@ func (m Model) View() string {
 		return m.renderDetailView(contentWidth, border, focusBorder)
 	}
 
-	// Calculate visible columns
-	visibleCols := m.visibleColumns(contentWidth)
+	// Row number column width
+	rowNumWidth := 0
+	if m.showRowNumbers {
+		rowNumWidth = m.rowNumberWidth()
+	}
+
+	// Calculate visible columns (account for row number column)
+	visibleCols := m.visibleColumns(contentWidth - rowNumWidth)
 
 	// Column headers
-	headerLine := m.renderRow(m.columns, visibleCols, -1, selectedBg, highlight, true)
+	var headerLine string
+	if m.showRowNumbers {
+		cell := lipgloss.NewStyle().Foreground(subtle).Render(
+			" " + m.padRight("#", rowNumWidth-3) + " ",
+		)
+		headerLine = cell + lipgloss.NewStyle().Foreground(border).Render("│")
+	}
+	headerLine += m.renderRow(m.columnsWithSortIndicator(), visibleCols, -1, selectedBg, highlight, true)
 	b.WriteString(headerLine)
 	b.WriteString("\n")
 
 	// Separator
 	sepParts := make([]string, 0)
+	if m.showRowNumbers {
+		sepParts = append(sepParts, strings.Repeat("─", rowNumWidth-1))
+	}
 	for _, ci := range visibleCols {
 		sepParts = append(sepParts, strings.Repeat("─", m.colWidths[ci]+2))
 	}
@@ -576,7 +740,19 @@ func (m Model) View() string {
 		}
 
 		for i := m.scrollRow; i < endRow; i++ {
-			line := m.renderRow(m.rows[i], visibleCols, i, selectedBg, highlight, false)
+			var line string
+			if m.showRowNumbers {
+				num := strconv.Itoa(i + 1)
+				padded := m.padLeft(num, rowNumWidth-3)
+				cell := " " + padded + " "
+				if i == m.cursorRow && m.focused {
+					cell = lipgloss.NewStyle().Background(selectedBg).Foreground(subtle).Render(cell)
+				} else {
+					cell = lipgloss.NewStyle().Foreground(subtle).Render(cell)
+				}
+				line = cell + lipgloss.NewStyle().Foreground(border).Render("│")
+			}
+			line += m.renderRow(m.rows[i], visibleCols, i, selectedBg, highlight, false)
 			b.WriteString(line)
 			if i < endRow-1 {
 				b.WriteString("\n")
@@ -788,6 +964,48 @@ func (m *Model) adjustHorizontalScroll() {
 	if m.cursorCol > m.scrollCol+5 {
 		m.scrollCol = m.cursorCol - 3
 	}
+}
+
+func (m Model) rowNumberWidth() int {
+	n := len(m.rows)
+	if n == 0 {
+		n = 1
+	}
+	digits := len(strconv.Itoa(n))
+	if digits < 1 {
+		digits = 1
+	}
+	// " " + digits + " " + "│" = digits + 3
+	return digits + 3
+}
+
+func (m Model) padLeft(s string, width int) string {
+	gap := width - stringutil.RuneWidth(s)
+	if gap <= 0 {
+		return s
+	}
+	return strings.Repeat(" ", gap) + s
+}
+
+func (m Model) padRight(s string, width int) string {
+	gap := width - stringutil.RuneWidth(s)
+	if gap <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", gap)
+}
+
+func (m Model) columnsWithSortIndicator() []string {
+	cols := make([]string, len(m.columns))
+	copy(cols, m.columns)
+	if m.sortCol >= 0 && m.sortCol < len(cols) && m.sortDir > 0 {
+		indicator := " ▲"
+		if m.sortDir == 2 {
+			indicator = " ▼"
+		}
+		cols[m.sortCol] = cols[m.sortCol] + indicator
+	}
+	return cols
 }
 
 func calculateColWidths(columns []string, rows [][]string) []int {

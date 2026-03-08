@@ -32,14 +32,39 @@ type ColumnInfo struct {
 	Extra    string  // e.g. auto_increment
 }
 
+// IndexInfo represents an index on a table.
+type IndexInfo struct {
+	Name    string
+	Columns []string
+	Unique  bool
+	Type    string // BTREE, FULLTEXT, SPATIAL, etc.
+}
+
+// ForeignKeyInfo represents a foreign key constraint.
+type ForeignKeyInfo struct {
+	Name             string
+	Columns          []string
+	RefTable         string
+	RefColumns       []string
+	OnDelete         string
+	OnUpdate         string
+}
+
 // SchemaInfo holds full schema details for a table.
 type SchemaInfo struct {
-	TableName string
-	Columns   []ColumnInfo
-	Engine    string
-	Charset   string
-	Collation string
-	RowCount  int64
+	TableName   string
+	Columns     []ColumnInfo
+	Indexes     []IndexInfo
+	ForeignKeys []ForeignKeyInfo
+	Engine      string
+	Charset     string
+	Collation   string
+	RowCount    int64
+	AutoIncr    int64
+	CreateTime  string
+	UpdateTime  string
+	DataSize    string
+	Comment     string
 }
 
 // QueryResult holds the output of an executed query.

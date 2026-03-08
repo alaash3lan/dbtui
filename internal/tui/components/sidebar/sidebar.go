@@ -23,6 +23,12 @@ type SchemaRequestMsg struct {
 	TableName string
 }
 
+// FavoriteToggledMsg is emitted when a table's favorite status is toggled.
+type FavoriteToggledMsg struct {
+	TableName  string
+	IsFavorite bool
+}
+
 // Colors holds the theme colors used by the sidebar.
 type Colors struct {
 	Highlight   lipgloss.Color
@@ -42,6 +48,7 @@ type KeyMap struct {
 	Info        key.Binding
 	Filter      key.Binding
 	ClearFilter key.Binding
+	Favorite    key.Binding
 }
 
 // DefaultKeyMap returns sidebar key bindings.
@@ -79,6 +86,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("escape"),
 			key.WithHelp("esc", "clear filter"),
 		),
+		Favorite: key.NewBinding(
+			key.WithKeys("f"),
+			key.WithHelp("f", "toggle favorite"),
+		),
 	}
 }
 
@@ -100,6 +111,10 @@ type Model struct {
 	filterInput  textinput.Model
 	filterActive bool // true when typing in filter
 	filterText   string
+
+	// Favorites
+	favorites    map[string]bool // set of favorited table names for current db
+	favSeparator int            // index in filteredTables where non-favorites start (-1 if no separator)
 }
 
 // New creates a new sidebar model.
@@ -110,9 +125,11 @@ func New(dbName string) Model {
 	fi.CharLimit = 256
 
 	return Model{
-		dbName:      dbName,
-		keyMap:      DefaultKeyMap(),
-		filterInput: fi,
+		dbName:       dbName,
+		keyMap:       DefaultKeyMap(),
+		filterInput:  fi,
+		favorites:    make(map[string]bool),
+		favSeparator: -1,
 	}
 }
 
@@ -151,6 +168,15 @@ func (m *Model) SetSize(width, height int) {
 // SetColors updates the theme colors.
 func (m *Model) SetColors(c Colors) {
 	m.colors = c
+}
+
+// SetFavorites sets the favorite tables for the current database.
+func (m *Model) SetFavorites(favs []string) {
+	m.favorites = make(map[string]bool, len(favs))
+	for _, name := range favs {
+		m.favorites[name] = true
+	}
+	m.applyFilter()
 }
 
 // SelectedTable returns the currently highlighted table name.
@@ -245,6 +271,20 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					return SchemaRequestMsg{TableName: tableName}
 				}
 			}
+		case key.Matches(msg, m.keyMap.Favorite):
+			if len(m.filteredTables) > 0 {
+				tableName := m.filteredTables[m.cursor].Name
+				isFav := !m.favorites[tableName]
+				if isFav {
+					m.favorites[tableName] = true
+				} else {
+					delete(m.favorites, tableName)
+				}
+				m.applyFilter()
+				return m, func() tea.Msg {
+					return FavoriteToggledMsg{TableName: tableName, IsFavorite: isFav}
+				}
+			}
 		}
 	}
 
@@ -299,7 +339,13 @@ func (m Model) View() string {
 	} else {
 		schemaHeight := 0
 		if m.showSchema && m.schemaInfo != nil {
-			schemaHeight = len(m.schemaInfo.Columns) + 5
+			schemaHeight = len(m.schemaInfo.Columns) + 8 // columns + header + metadata lines
+			if len(m.schemaInfo.Indexes) > 0 {
+				schemaHeight += len(m.schemaInfo.Indexes) + 1
+			}
+			if len(m.schemaInfo.ForeignKeys) > 0 {
+				schemaHeight += len(m.schemaInfo.ForeignKeys) + 1
+			}
 		}
 		visibleHeight := m.height - 5 - schemaHeight
 		if visibleHeight < 1 {
@@ -315,10 +361,20 @@ func (m Model) View() string {
 			end = len(tables)
 		}
 
+		favStyle := lipgloss.NewStyle().Foreground(c.Highlight)
+
 		for i := start; i < end; i++ {
+			// Draw separator between favorites and rest
+			if m.favSeparator > 0 && i == m.favSeparator {
+				sep := strings.Repeat("─", contentWidth-2)
+				b.WriteString(dimmedStyle.Render(" " + sep))
+				b.WriteString("\n")
+			}
+
 			rowCount := formatRowCount(tables[i].Rows)
 			rowCountSuffix := fmt.Sprintf(" (%s)", rowCount)
-			// Reserve space for prefix ("> " or "  ") and row count suffix
+			isFav := m.favorites[tables[i].Name]
+			// Reserve space for prefix ("> " or "* " or "  ") and row count suffix
 			maxNameWidth := contentWidth - 2 - len(rowCountSuffix)
 			if maxNameWidth < 1 {
 				maxNameWidth = 1
@@ -327,6 +383,8 @@ func (m Model) View() string {
 			rowCountRendered := dimmedStyle.Render(rowCountSuffix)
 			if i == m.cursor {
 				b.WriteString(activeStyle.Width(contentWidth).Render(fmt.Sprintf("> %s", name) + rowCountRendered))
+			} else if isFav {
+				b.WriteString(itemStyle.Width(contentWidth).Render(favStyle.Render("* ")+name+rowCountRendered))
 			} else {
 				b.WriteString(itemStyle.Width(contentWidth).Render(fmt.Sprintf("  %s", name) + rowCountRendered))
 			}
@@ -337,21 +395,97 @@ func (m Model) View() string {
 	}
 
 	if m.showSchema && m.schemaInfo != nil {
+		s := m.schemaInfo
 		b.WriteString("\n\n")
-		b.WriteString(dimmedStyle.Width(contentWidth).Render(" Schema Info"))
+		b.WriteString(headerStyle.Width(contentWidth).Render(" Schema Info"))
 		b.WriteString("\n")
-		b.WriteString(itemStyle.Render(fmt.Sprintf(" engine: %s", m.schemaInfo.Engine)))
+
+		// Table metadata
+		b.WriteString(itemStyle.Render(fmt.Sprintf(" engine: %s", s.Engine)))
 		b.WriteString("\n")
-		b.WriteString(itemStyle.Render(fmt.Sprintf(" rows: %d", m.schemaInfo.RowCount)))
+		b.WriteString(itemStyle.Render(fmt.Sprintf(" rows: %d", s.RowCount)))
+		if s.DataSize != "" {
+			b.WriteString("  ")
+			b.WriteString(dimmedStyle.Render(s.DataSize))
+		}
 		b.WriteString("\n")
-		b.WriteString(itemStyle.Render(fmt.Sprintf(" charset: %s", m.schemaInfo.Charset)))
-		for _, col := range m.schemaInfo.Columns {
-			keyMark := ""
+		b.WriteString(itemStyle.Render(fmt.Sprintf(" charset: %s", s.Charset)))
+		if s.AutoIncr > 0 {
+			b.WriteString("\n")
+			b.WriteString(itemStyle.Render(fmt.Sprintf(" auto_incr: %d", s.AutoIncr)))
+		}
+		if s.CreateTime != "" {
+			b.WriteString("\n")
+			b.WriteString(dimmedStyle.Render(fmt.Sprintf("  created: %s", s.CreateTime)))
+		}
+		if s.UpdateTime != "" {
+			b.WriteString("\n")
+			b.WriteString(dimmedStyle.Render(fmt.Sprintf("  updated: %s", s.UpdateTime)))
+		}
+		if s.Comment != "" {
+			b.WriteString("\n")
+			b.WriteString(dimmedStyle.Render(fmt.Sprintf("  comment: %s", s.Comment)))
+		}
+
+		// Columns
+		b.WriteString("\n")
+		b.WriteString(dimmedStyle.Width(contentWidth).Render(" Columns"))
+		for _, col := range s.Columns {
+			marks := ""
 			if col.Key == "PRI" {
-				keyMark = " PK"
+				marks += " PK"
+			} else if col.Key == "UNI" {
+				marks += " UQ"
+			} else if col.Key == "MUL" {
+				marks += " IX"
+			}
+			if col.Extra != "" {
+				marks += " " + col.Extra
+			}
+			nullable := ""
+			if !col.Nullable {
+				nullable = " NOT NULL"
+			}
+			def := ""
+			if col.Default != nil {
+				def = fmt.Sprintf(" =%s", *col.Default)
 			}
 			b.WriteString("\n")
-			b.WriteString(dimmedStyle.Render(fmt.Sprintf("  %s %s%s", col.Name, col.Type, keyMark)))
+			line := fmt.Sprintf("  %s %s%s%s%s", col.Name, col.Type, nullable, def, marks)
+			b.WriteString(dimmedStyle.Render(stringutil.TruncateSimple(line, contentWidth-1)))
+		}
+
+		// Indexes
+		if len(s.Indexes) > 0 {
+			b.WriteString("\n")
+			b.WriteString(dimmedStyle.Width(contentWidth).Render(" Indexes"))
+			for _, idx := range s.Indexes {
+				uniq := ""
+				if idx.Unique && idx.Name != "PRIMARY" {
+					uniq = "UNIQUE "
+				}
+				cols := strings.Join(idx.Columns, ", ")
+				line := fmt.Sprintf("  %s%s (%s)", uniq, idx.Name, cols)
+				b.WriteString("\n")
+				b.WriteString(dimmedStyle.Render(stringutil.TruncateSimple(line, contentWidth-1)))
+			}
+		}
+
+		// Foreign Keys
+		if len(s.ForeignKeys) > 0 {
+			b.WriteString("\n")
+			b.WriteString(dimmedStyle.Width(contentWidth).Render(" Foreign Keys"))
+			for _, fk := range s.ForeignKeys {
+				cols := strings.Join(fk.Columns, ", ")
+				refCols := strings.Join(fk.RefColumns, ", ")
+				line := fmt.Sprintf("  %s (%s) -> %s(%s)", fk.Name, cols, fk.RefTable, refCols)
+				b.WriteString("\n")
+				b.WriteString(dimmedStyle.Render(stringutil.TruncateSimple(line, contentWidth-1)))
+				if fk.OnDelete != "" && fk.OnDelete != "RESTRICT" {
+					b.WriteString("\n")
+					b.WriteString(dimmedStyle.Render(fmt.Sprintf("    ON DELETE %s ON UPDATE %s", fk.OnDelete, fk.OnUpdate)))
+				}
+			}
 		}
 	}
 
@@ -384,18 +518,33 @@ func formatRowCount(n int64) string {
 }
 
 func (m *Model) applyFilter() {
+	var base []database.TableInfo
 	if m.filterText == "" {
-		m.filteredTables = m.allTables
+		base = m.allTables
 	} else {
 		needle := strings.ToLower(m.filterText)
-		var filtered []database.TableInfo
 		for _, t := range m.allTables {
 			if strings.Contains(strings.ToLower(t.Name), needle) {
-				filtered = append(filtered, t)
+				base = append(base, t)
 			}
 		}
-		m.filteredTables = filtered
 	}
+
+	// Partition into favorites first, then the rest
+	var favs, rest []database.TableInfo
+	for _, t := range base {
+		if m.favorites[t.Name] {
+			favs = append(favs, t)
+		} else {
+			rest = append(rest, t)
+		}
+	}
+
+	m.favSeparator = -1
+	if len(favs) > 0 && len(rest) > 0 {
+		m.favSeparator = len(favs)
+	}
+	m.filteredTables = append(favs, rest...)
 
 	// Reset cursor if out of bounds
 	if m.cursor >= len(m.filteredTables) {

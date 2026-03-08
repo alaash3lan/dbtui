@@ -59,8 +59,8 @@ func New(cfg ConnectionConfig) (*DB, error) {
 	}
 
 	conn.SetConnMaxLifetime(5 * time.Minute)
-	conn.SetMaxOpenConns(5)
-	conn.SetMaxIdleConns(2)
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	if err := conn.Ping(); err != nil {
 		conn.Close()
@@ -107,8 +107,8 @@ func (db *DB) Reconnect() error {
 	}
 
 	conn.SetConnMaxLifetime(5 * time.Minute)
-	conn.SetMaxOpenConns(5)
-	conn.SetMaxIdleConns(2)
+	conn.SetMaxOpenConns(1)
+	conn.SetMaxIdleConns(1)
 
 	if err := conn.Ping(); err != nil {
 		conn.Close()

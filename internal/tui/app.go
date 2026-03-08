@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
@@ -70,6 +71,28 @@ type Model struct {
 	showDBSwitcher bool
 	databases      []string
 	dbCursor       int
+
+	// Query bookmarks
+	showBookmarks     bool
+	bookmarks         []config.SavedQuery
+	bookmarkCursor    int
+	savingBookmark    bool
+	bookmarkNameInput textinput.Model
+
+	// Delete row confirmation
+	showDeleteConfirm bool
+	deleteRowInfo     *deleteRowInfo
+
+	// Table favorites
+	favoritesCfg *config.FavoritesConfig
+}
+
+// deleteRowInfo holds info needed to confirm and execute a row deletion.
+type deleteRowInfo struct {
+	table      string
+	pkColumns  []string
+	pkValues   []string
+	rowPreview string
 }
 
 // New creates the root model.
@@ -78,20 +101,34 @@ func New(db *database.DB, version string, queryTimeout time.Duration, pageSize i
 	ed.SetHistoryConfig(historyCfg.SaveToFile, historyCfg.File)
 	ed.LoadHistory()
 
+	ti := textinput.New()
+	ti.Placeholder = "Bookmark name..."
+	ti.CharLimit = 100
+	ti.Width = 30
+
+	bookmarksCfg := config.LoadBookmarks()
+	favoritesCfg := config.LoadFavorites()
+
+	sb := sidebar.New(db.DatabaseName())
+	sb.SetFavorites(favoritesCfg.Favorites[db.DatabaseName()])
+
 	m := Model{
-		db:           db,
-		keyMap:       DefaultKeyMap(),
-		styles:       DefaultStyles(),
-		theme:        DarkTheme(),
-		version:      version,
-		queryTimeout: queryTimeout,
-		sidebar:      sidebar.New(db.DatabaseName()),
-		dataView:     dataview.New(pageSize),
-		editor:       ed,
-		titleBar:     titlebar.New(version),
-		statusBar:    statusbar.New(db.DatabaseName(), db.User(), db.Host()),
-		sidebarRatio: 0.20,
-		focused:      PaneSidebar,
+		db:                db,
+		keyMap:            DefaultKeyMap(),
+		styles:            DefaultStyles(),
+		theme:             DarkTheme(),
+		version:           version,
+		queryTimeout:      queryTimeout,
+		sidebar:           sb,
+		dataView:          dataview.New(pageSize),
+		editor:            ed,
+		titleBar:          titlebar.New(version),
+		statusBar:         statusbar.New(db.DatabaseName(), db.User(), db.Host()),
+		sidebarRatio:      0.20,
+		focused:           PaneSidebar,
+		bookmarks:         bookmarksCfg.Bookmarks,
+		bookmarkNameInput: ti,
+		favoritesCfg:      favoritesCfg,
 	}
 	m.applyTheme()
 	return m
@@ -141,6 +178,85 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.showDBSwitcher = false
 					return m, m.switchDatabaseCmd(selected)
 				}
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Bookmark name input overlay intercepts all keys when active
+		if m.savingBookmark {
+			switch msg.String() {
+			case "esc":
+				m.savingBookmark = false
+				m.bookmarkNameInput.SetValue("")
+				m.bookmarkNameInput.Blur()
+				return m, nil
+			case "enter":
+				name := strings.TrimSpace(m.bookmarkNameInput.Value())
+				if name == "" {
+					return m, nil
+				}
+				sql := strings.TrimSpace(m.editor.Value())
+				m.savingBookmark = false
+				m.bookmarkNameInput.SetValue("")
+				m.bookmarkNameInput.Blur()
+				return m, m.saveBookmarkCmd(name, sql)
+			default:
+				var cmd tea.Cmd
+				m.bookmarkNameInput, cmd = m.bookmarkNameInput.Update(msg)
+				return m, cmd
+			}
+		}
+
+		// Bookmark selector overlay intercepts all keys when active
+		if m.showBookmarks {
+			switch msg.String() {
+			case "esc":
+				m.showBookmarks = false
+				return m, nil
+			case "j", "down":
+				if m.bookmarkCursor < len(m.bookmarks)-1 {
+					m.bookmarkCursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.bookmarkCursor > 0 {
+					m.bookmarkCursor--
+				}
+				return m, nil
+			case "enter":
+				if len(m.bookmarks) > 0 && m.bookmarkCursor < len(m.bookmarks) {
+					selected := m.bookmarks[m.bookmarkCursor]
+					m.showBookmarks = false
+					return m, func() tea.Msg {
+						return bookmarkSelectedMsg{SQL: selected.SQL}
+					}
+				}
+				return m, nil
+			case "x":
+				if len(m.bookmarks) > 0 && m.bookmarkCursor < len(m.bookmarks) {
+					m.bookmarks = append(m.bookmarks[:m.bookmarkCursor], m.bookmarks[m.bookmarkCursor+1:]...)
+					if m.bookmarkCursor >= len(m.bookmarks) && m.bookmarkCursor > 0 {
+						m.bookmarkCursor--
+					}
+					return m, m.persistBookmarksCmd()
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Delete row confirmation overlay intercepts all keys when active
+		if m.showDeleteConfirm {
+			switch msg.String() {
+			case "y", "Y":
+				m.showDeleteConfirm = false
+				info := m.deleteRowInfo
+				m.deleteRowInfo = nil
+				return m, m.deleteRowCmd(info.table, info.pkColumns, info.pkValues)
+			case "n", "N", "esc":
+				m.showDeleteConfirm = false
+				m.deleteRowInfo = nil
 				return m, nil
 			}
 			return m, nil
@@ -207,6 +323,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showDBSwitcher = true
 			m.dbCursor = 0
 			return m, m.fetchDatabaseListCmd()
+		case key.Matches(msg, m.keyMap.Bookmarks):
+			m.showBookmarks = true
+			m.bookmarkCursor = 0
+			return m, nil
+		case key.Matches(msg, m.keyMap.SaveBookmark):
+			val := strings.TrimSpace(m.editor.Value())
+			if val == "" {
+				return m, nil
+			}
+			m.savingBookmark = true
+			m.bookmarkNameInput.SetValue("")
+			m.bookmarkNameInput.Focus()
+			return m, m.bookmarkNameInput.Cursor.BlinkCmd()
 		}
 
 	case reconnectMsg:
@@ -229,9 +358,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.sidebar.SetDBName(msg.Name)
+		m.sidebar.SetFavorites(m.favoritesCfg.Favorites[msg.Name])
 		m.statusBar.SetDBName(msg.Name)
 		m.currentTable = ""
 		m.dataView.SetData("", nil, nil)
+		m.editor.SetTableNames(nil) // clear stale autocomplete until new list arrives
 		m.editor.SetResult(fmt.Sprintf("Database changed to %s", msg.Name))
 		return m, m.fetchTableListCmd()
 
@@ -261,6 +392,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.tables = msg.Tables
 		m.sidebar.SetTables(msg.Tables)
+		// Feed table names to editor for autocomplete
+		names := make([]string, len(msg.Tables))
+		for i, t := range msg.Tables {
+			names[i] = t.Name
+		}
+		m.editor.SetTableNames(names)
 
 	case sidebar.TableSelectedMsg:
 		m.currentTable = msg.TableName
@@ -274,6 +411,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sidebar.SchemaRequestMsg:
 		return m, m.fetchSchemaCmd(msg.TableName)
+
+	case sidebar.FavoriteToggledMsg:
+		return m, m.saveFavoriteCmd(msg.TableName, msg.IsFavorite)
 
 	case editor.ExecuteQueryMsg:
 		m.editor.SetRunning(true)
@@ -307,9 +447,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Handle database switch
 			if msg.DatabaseChanged != "" {
 				m.sidebar.SetDBName(msg.DatabaseChanged)
+				m.sidebar.SetFavorites(m.favoritesCfg.Favorites[msg.DatabaseChanged])
 				m.statusBar.SetDBName(msg.DatabaseChanged)
 				m.currentTable = ""
 				m.dataView.SetData("", nil, nil)
+				m.editor.SetTableNames(nil) // clear stale autocomplete
 				m.editor.SetResult(fmt.Sprintf("Database changed to %s", msg.DatabaseChanged))
 				return m, m.fetchTableListCmd()
 			}
@@ -345,6 +487,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SchemaInfoMsg:
 		if msg.Err == nil {
 			m.sidebar.SetSchemaInfo(msg.Info)
+			m.dataView.SetSchemaInfo(msg.Info)
 		}
 
 	case exportRequestMsg:
@@ -365,6 +508,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		rowCount := len(m.dataView.Rows())
 		m.editor.SetResult(fmt.Sprintf("Exported %d rows to %s", rowCount, filepath.Base(msg.Path)))
 
+	case dataview.DeleteRowRequestMsg:
+		m.showDeleteConfirm = true
+		m.deleteRowInfo = &deleteRowInfo{
+			table:      msg.Table,
+			pkColumns:  msg.PKColumns,
+			pkValues:   msg.PKValues,
+			rowPreview: msg.RowPreview,
+		}
+		return m, nil
+
+	case deleteRowResultMsg:
+		if msg.Err != nil {
+			if database.IsConnectionError(msg.Err) {
+				m.editor.SetError("Connection lost. Reconnecting...")
+				return m, func() tea.Msg { return reconnectMsg{} }
+			}
+			m.editor.SetError(fmt.Sprintf("Delete failed: %s", msg.Err))
+			return m, nil
+		}
+		m.editor.SetResult(fmt.Sprintf("Deleted %d row(s)", msg.AffectedRows))
+		// Refresh table data and count
+		if m.currentTable != "" {
+			return m, tea.Batch(
+				m.fetchTableDataCmd(m.currentTable),
+				m.fetchCountCmd(m.currentTable),
+			)
+		}
+		return m, nil
+
 	case dataview.CopyToClipboardMsg:
 		return m, m.copyToClipboardCmd(msg.Text)
 
@@ -375,6 +547,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor.SetResult("Copied to clipboard")
 		}
 		return m, nil
+
+	case bookmarkSelectedMsg:
+		m.editor.SetValue(msg.SQL)
+		m.editor.ClearStatus()
+		return m, nil
+
+	case bookmarkSavedMsg:
+		if msg.Err != nil {
+			m.editor.SetError(fmt.Sprintf("Bookmark save failed: %s", msg.Err))
+		} else {
+			// Reload bookmarks from disk to stay in sync
+			bookmarksCfg := config.LoadBookmarks()
+			m.bookmarks = bookmarksCfg.Bookmarks
+			if msg.Name != "" {
+				m.editor.SetResult(fmt.Sprintf("Bookmark saved: %s", msg.Name))
+			}
+		}
+		return m, nil
+
+	case favoriteSavedMsg:
+		if msg.Err != nil {
+			m.editor.SetError(fmt.Sprintf("Favorite save failed: %s", msg.Err))
+		}
+		return m, nil
+	}
+
+	// Route cursor blink and other non-key messages to textinput when saving bookmark
+	if m.savingBookmark {
+		var cmd tea.Cmd
+		m.bookmarkNameInput, cmd = m.bookmarkNameInput.Update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	// Route to focused component
@@ -424,6 +630,21 @@ func (m Model) View() string {
 	// Database switcher overlay
 	if m.showDBSwitcher {
 		return m.renderDBSwitcher()
+	}
+
+	// Bookmark selector overlay
+	if m.showBookmarks {
+		return m.renderBookmarks()
+	}
+
+	// Bookmark name input overlay
+	if m.savingBookmark {
+		return m.renderBookmarkSave()
+	}
+
+	// Delete row confirmation overlay
+	if m.showDeleteConfirm {
+		return m.renderDeleteConfirm()
 	}
 
 	// Title bar
@@ -665,6 +886,71 @@ func (m Model) exportCmd(columns []string, rows [][]string, format string) tea.C
 	}
 }
 
+func (m Model) deleteRowCmd(table string, pkColumns []string, pkValues []string) tea.Cmd {
+	db := m.db
+	timeout := m.queryTimeout
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		affected, err := db.DeleteRow(ctx, table, pkColumns, pkValues)
+		return deleteRowResultMsg{AffectedRows: affected, Err: err}
+	}
+}
+
+func (m Model) renderDeleteConfirm() string {
+	t := m.theme
+	title := lipgloss.NewStyle().Foreground(t.ErrorColor).Bold(true)
+	desc := lipgloss.NewStyle().Foreground(t.Text)
+	dim := lipgloss.NewStyle().Foreground(t.Subtle)
+	warn := lipgloss.NewStyle().Foreground(t.WarningColor).Bold(true)
+
+	content := title.Render("Delete Row") + "\n\n"
+	content += warn.Render("Are you sure you want to delete this row?") + "\n\n"
+
+	if m.deleteRowInfo != nil {
+		// Show a preview of the row data, limit lines
+		lines := strings.Split(m.deleteRowInfo.rowPreview, "\n")
+		maxLines := m.height - 14
+		if maxLines < 5 {
+			maxLines = 5
+		}
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+			lines = append(lines, fmt.Sprintf("... %d more columns", len(strings.Split(m.deleteRowInfo.rowPreview, "\n"))-maxLines))
+		}
+		for _, line := range lines {
+			content += desc.Render("  "+line) + "\n"
+		}
+	}
+
+	content += "\n" + dim.Render("y: confirm delete  n/Esc: cancel")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.ErrorColor).
+		Padding(1, 2).
+		Width(50)
+
+	rendered := box.Render(content)
+	hPad := (m.width - lipgloss.Width(rendered)) / 2
+	vPad := (m.height - lipgloss.Height(rendered)) / 2
+	if hPad < 0 {
+		hPad = 0
+	}
+	if vPad < 0 {
+		vPad = 0
+	}
+
+	padded := strings.Repeat("\n", vPad)
+	hPadding := strings.Repeat(" ", hPad)
+	renderedLines := strings.Split(rendered, "\n")
+	for _, line := range renderedLines {
+		padded += hPadding + line + "\n"
+	}
+
+	return padded
+}
+
 func (m Model) renderHelp() string {
 	t := m.theme
 	title := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
@@ -686,6 +972,8 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  Ctrl+J      ") + desc.Render("Export data as JSON") + "\n"
 	help += keyStyle.Render("  Ctrl+X      ") + desc.Render("Explain current query") + "\n"
 	help += keyStyle.Render("  Ctrl+D      ") + desc.Render("Switch database") + "\n"
+	help += keyStyle.Render("  Ctrl+B      ") + desc.Render("Open query bookmarks") + "\n"
+	help += keyStyle.Render("  Ctrl+K      ") + desc.Render("Save query as bookmark") + "\n"
 	help += keyStyle.Render("  F1          ") + desc.Render("Toggle this help") + "\n\n"
 
 	help += title.Render("Sidebar") + "\n"
@@ -694,6 +982,7 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  i           ") + desc.Render("Toggle schema info") + "\n"
 	help += keyStyle.Render("  g/G         ") + desc.Render("First/last table") + "\n"
 	help += keyStyle.Render("  /           ") + desc.Render("Filter tables") + "\n"
+	help += keyStyle.Render("  f           ") + desc.Render("Toggle table favorite") + "\n"
 	help += keyStyle.Render("  Escape      ") + desc.Render("Clear filter") + "\n\n"
 
 	help += title.Render("Data View") + "\n"
@@ -705,7 +994,10 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  Home/End    ") + desc.Render("First/last row") + "\n"
 	help += keyStyle.Render("  c           ") + desc.Render("Copy cell to clipboard") + "\n"
 	help += keyStyle.Render("  y           ") + desc.Render("Copy row to clipboard") + "\n"
-	help += keyStyle.Render("  d           ") + desc.Render("Toggle row detail view") + "\n\n"
+	help += keyStyle.Render("  d           ") + desc.Render("Toggle row detail view") + "\n"
+	help += keyStyle.Render("  s           ") + desc.Render("Sort by current column") + "\n"
+	help += keyStyle.Render("  Ctrl+N      ") + desc.Render("Toggle row numbers") + "\n"
+	help += keyStyle.Render("  x           ") + desc.Render("Delete row (with confirmation)") + "\n\n"
 
 	help += title.Render("Query Editor") + "\n"
 	help += keyStyle.Render("  Enter       ") + desc.Render("Execute (requires ;) or newline") + "\n"
@@ -830,6 +1122,175 @@ func (m Model) renderDBSwitcher() string {
 	}
 
 	return padded
+}
+
+func (m Model) renderBookmarks() string {
+	t := m.theme
+	title := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
+	itemStyle := lipgloss.NewStyle().Foreground(t.Text)
+	cursorStyle := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(t.Subtle)
+
+	content := title.Render("Query Bookmarks") + "\n\n"
+
+	if len(m.bookmarks) == 0 {
+		content += dim.Render("No bookmarks saved yet.")
+		content += "\n" + dim.Render("Press Ctrl+K to save the current query.")
+	} else {
+		// Calculate visible window for scrolling
+		maxVisible := m.height - 10
+		if maxVisible < 5 {
+			maxVisible = 5
+		}
+		start := 0
+		if m.bookmarkCursor >= maxVisible {
+			start = m.bookmarkCursor - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(m.bookmarks) {
+			end = len(m.bookmarks)
+		}
+
+		for i := start; i < end; i++ {
+			bm := m.bookmarks[i]
+			prefix := "  "
+			if i == m.bookmarkCursor {
+				prefix = "> "
+			}
+
+			line := prefix + bm.Name
+			if i == m.bookmarkCursor {
+				content += cursorStyle.Render(line)
+			} else {
+				content += itemStyle.Render(line)
+			}
+			if i < end-1 {
+				content += "\n"
+			}
+		}
+
+		if end < len(m.bookmarks) {
+			content += "\n" + dim.Render(fmt.Sprintf("  ... %d more", len(m.bookmarks)-end))
+		}
+	}
+
+	content += "\n\n" + dim.Render("j/k: navigate  Enter: load  x: delete  Esc: close")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Highlight).
+		Padding(1, 2).
+		Width(50)
+
+	// Center in terminal
+	rendered := box.Render(content)
+	hPad := (m.width - lipgloss.Width(rendered)) / 2
+	vPad := (m.height - lipgloss.Height(rendered)) / 2
+	if hPad < 0 {
+		hPad = 0
+	}
+	if vPad < 0 {
+		vPad = 0
+	}
+
+	padded := strings.Repeat("\n", vPad)
+	hPadding := strings.Repeat(" ", hPad)
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		padded += hPadding + line + "\n"
+	}
+
+	return padded
+}
+
+func (m Model) renderBookmarkSave() string {
+	t := m.theme
+	title := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
+	dim := lipgloss.NewStyle().Foreground(t.Subtle)
+
+	content := title.Render("Save Bookmark") + "\n\n"
+	content += m.bookmarkNameInput.View() + "\n\n"
+	content += dim.Render("Enter: save  Esc: cancel")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Highlight).
+		Padding(1, 2).
+		Width(40)
+
+	// Center in terminal
+	rendered := box.Render(content)
+	hPad := (m.width - lipgloss.Width(rendered)) / 2
+	vPad := (m.height - lipgloss.Height(rendered)) / 2
+	if hPad < 0 {
+		hPad = 0
+	}
+	if vPad < 0 {
+		vPad = 0
+	}
+
+	padded := strings.Repeat("\n", vPad)
+	hPadding := strings.Repeat(" ", hPad)
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		padded += hPadding + line + "\n"
+	}
+
+	return padded
+}
+
+func (m *Model) saveBookmarkCmd(name, sql string) tea.Cmd {
+	return func() tea.Msg {
+		bookmarksCfg := config.LoadBookmarks()
+		bookmarksCfg.Bookmarks = append(bookmarksCfg.Bookmarks, config.SavedQuery{
+			Name: name,
+			SQL:  sql,
+		})
+		err := config.SaveBookmarks(bookmarksCfg)
+		return bookmarkSavedMsg{Name: name, Err: err}
+	}
+}
+
+func (m *Model) persistBookmarksCmd() tea.Cmd {
+	bookmarks := make([]config.SavedQuery, len(m.bookmarks))
+	copy(bookmarks, m.bookmarks)
+	return func() tea.Msg {
+		cfg := &config.BookmarksConfig{Bookmarks: bookmarks}
+		err := config.SaveBookmarks(cfg)
+		return bookmarkSavedMsg{Name: "", Err: err}
+	}
+}
+
+func (m *Model) saveFavoriteCmd(tableName string, isFav bool) tea.Cmd {
+	dbName := m.db.DatabaseName()
+
+	// Update in-memory config
+	favs := m.favoritesCfg.Favorites[dbName]
+	if isFav {
+		favs = append(favs, tableName)
+	} else {
+		var filtered []string
+		for _, f := range favs {
+			if f != tableName {
+				filtered = append(filtered, f)
+			}
+		}
+		favs = filtered
+	}
+	if len(favs) == 0 {
+		delete(m.favoritesCfg.Favorites, dbName)
+	} else {
+		m.favoritesCfg.Favorites[dbName] = favs
+	}
+
+	cfg := m.favoritesCfg
+	return func() tea.Msg {
+		err := config.SaveFavorites(cfg)
+		if err != nil {
+			return favoriteSavedMsg{Err: err}
+		}
+		return favoriteSavedMsg{}
+	}
 }
 
 func (m *Model) applyTheme() {

@@ -66,3 +66,25 @@ type reconnectResultMsg struct {
 	Err error
 }
 
+// deleteRowResultMsg carries the result of a row deletion.
+type deleteRowResultMsg struct {
+	AffectedRows int64
+	Err          error
+}
+
+// bookmarkSelectedMsg is sent when the user picks a saved query bookmark.
+type bookmarkSelectedMsg struct {
+	SQL string
+}
+
+// bookmarkSavedMsg is sent after saving a query bookmark.
+type bookmarkSavedMsg struct {
+	Name string
+	Err  error
+}
+
+// favoriteSavedMsg is sent after persisting table favorites to disk.
+type favoriteSavedMsg struct {
+	Err error
+}
+

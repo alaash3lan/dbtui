@@ -10,15 +10,18 @@ A modern terminal-based MySQL/MariaDB client built with Go and [Bubble Tea](http
 - **Split-pane TUI** — sidebar, data grid, and query editor in one view
 - **Table browser** — navigate tables with keyboard, view schema info
 - **Table search** — press `/` in the sidebar to filter tables by name
+- **Table favorites** — press `f` to bookmark tables; favorites sort to the top and persist across sessions
 - **Data grid** — scroll, filter, and paginate through table data
 - **Query editor** — execute SQL with history navigation and multi-line support
 - **SQL syntax highlighting** — keywords, strings, and numbers colored when editor is unfocused
 - **Query history persistence** — history saved to disk and restored across sessions
 - **Server-side pagination** — efficiently browse large tables page by page
+- **Query bookmarks** — save and load frequently used queries with `Ctrl+K` / `Ctrl+B`
 - **Database switching** — `USE dbname;` or `Ctrl+D` to switch databases without reconnecting
 - **Quick filter** — filter displayed rows by column or across all columns (`column | value`)
 - **Export data** — export query results as CSV (`Ctrl+S`) or JSON (`Ctrl+J`)
 - **Copy to clipboard** — copy cell (`c`) or row (`y`) from the data view
+- **Row deletion** — delete rows with `x` key and confirmation prompt (requires primary key)
 - **Dark/Light themes** — toggle with `Ctrl+T`
 - **Query cancellation** — `Ctrl+C` cancels a running query, press again to quit
 - **Auto-reconnect** — automatically reconnects up to 3 times on connection drop
@@ -150,6 +153,8 @@ tls_key = "/path/to/client-key.pem"
 | `Ctrl+J`      | Export data as JSON        |
 | `Ctrl+X`      | Explain current query     |
 | `Ctrl+D`      | Switch database           |
+| `Ctrl+B`      | Open query bookmarks      |
+| `Ctrl+K`      | Save query as bookmark    |
 | `F1`          | Toggle help overlay       |
 
 ### Sidebar
@@ -161,6 +166,7 @@ tls_key = "/path/to/client-key.pem"
 | `i`           | Toggle schema info        |
 | `g` / `G`     | First / last table        |
 | `/`           | Filter tables by name     |
+| `f`           | Toggle table favorite     |
 | `Escape`      | Clear filter              |
 
 ### Data View
@@ -176,6 +182,9 @@ tls_key = "/path/to/client-key.pem"
 | `c`           | Copy cell to clipboard    |
 | `y`           | Copy row to clipboard     |
 | `d`           | Toggle row detail view    |
+| `s`           | Sort by current column    |
+| `Ctrl+N`      | Toggle row numbers        |
+| `x`           | Delete row (with confirmation) |
 
 ### Query Editor
 
