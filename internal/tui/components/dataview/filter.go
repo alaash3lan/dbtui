@@ -52,10 +52,6 @@ func ApplyFilter(columns []string, rows [][]string, f FilterResult) [][]string {
 				break
 			}
 		}
-		// If specified column not found, search all
-		if colIdx == -1 {
-			colIdx = -1
-		}
 	}
 
 	var filtered [][]string

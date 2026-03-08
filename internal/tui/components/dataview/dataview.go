@@ -8,7 +8,17 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/alaa/dbplus/internal/stringutil"
 )
+
+// PageRequestMsg is emitted when the user navigates past the loaded page.
+type PageRequestMsg struct {
+	Table  string
+	Page   int
+	Offset int
+	Limit  int
+}
 
 // KeyMap defines dataview-specific keybindings.
 type KeyMap struct {
@@ -80,18 +90,6 @@ type Colors struct {
 	WarningColor lipgloss.Color
 }
 
-// DefaultColors returns dark theme colors.
-func DefaultColors() Colors {
-	return Colors{
-		Highlight:    lipgloss.Color("#7DC4E4"),
-		Subtle:       lipgloss.Color("#626262"),
-		Border:       lipgloss.Color("#444444"),
-		FocusBorder:  lipgloss.Color("#7DC4E4"),
-		SelectedBg:   lipgloss.Color("#313244"),
-		WarningColor: lipgloss.Color("#F9E2AF"),
-	}
-}
-
 // Model represents the data viewer state.
 type Model struct {
 	columns      []string
@@ -132,7 +130,6 @@ func New() Model {
 		pageSize:    100,
 		keyMap:      DefaultKeyMap(),
 		filterInput: fi,
-		colors:      DefaultColors(),
 	}
 }
 
@@ -176,6 +173,11 @@ func (m *Model) SetColors(c Colors) {
 	m.colors = c
 }
 
+// SetPageDirect sets the page without changing totalRows.
+func (m *Model) SetPageDirect(page int) {
+	m.page = page
+}
+
 // PageSize returns the configured page size.
 func (m Model) PageSize() int {
 	return m.pageSize
@@ -184,6 +186,19 @@ func (m Model) PageSize() int {
 // Page returns the current page number.
 func (m Model) Page() int {
 	return m.page
+}
+
+// TotalPages returns the total number of pages.
+func (m Model) TotalPages() int {
+	if m.totalRows <= 0 {
+		return 1
+	}
+	return int((m.totalRows + int64(m.pageSize) - 1) / int64(m.pageSize))
+}
+
+// TableName returns the current table name.
+func (m Model) TableName() string {
+	return m.tableName
 }
 
 // Init implements tea.Model.
@@ -277,6 +292,19 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.cursorRow = len(m.rows) - 1
 			}
 			m.adjustVerticalScroll()
+			// Request next server page if at end of data and more pages exist
+			if m.filterText == "" && m.tableName != "" && len(m.rows) > 0 &&
+				m.cursorRow == len(m.rows)-1 && m.page+1 < m.TotalPages() {
+				nextPage := m.page + 1
+				return m, func() tea.Msg {
+					return PageRequestMsg{
+						Table:  m.tableName,
+						Page:   nextPage,
+						Offset: nextPage * m.pageSize,
+						Limit:  m.pageSize,
+					}
+				}
+			}
 		case key.Matches(msg, m.keyMap.PageUp):
 			viewportRows := m.viewportRows()
 			m.cursorRow -= viewportRows
@@ -284,6 +312,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.cursorRow = 0
 			}
 			m.adjustVerticalScroll()
+			// Request previous server page if at start and on a later page
+			if m.filterText == "" && m.tableName != "" && m.cursorRow == 0 && m.page > 0 {
+				prevPage := m.page - 1
+				return m, func() tea.Msg {
+					return PageRequestMsg{
+						Table:  m.tableName,
+						Page:   prevPage,
+						Offset: prevPage * m.pageSize,
+						Limit:  m.pageSize,
+					}
+				}
+			}
 		}
 	}
 
@@ -427,10 +467,10 @@ func (m Model) renderRow(cells []string, visibleCols []int, rowIdx int, selected
 	for _, ci := range visibleCols {
 		val := ""
 		if ci < len(cells) {
-			val = truncate(cells[ci], m.colWidths[ci])
+			val = stringutil.Truncate(cells[ci], m.colWidths[ci])
 		}
 		// Pad to column width
-		padded := val + strings.Repeat(" ", m.colWidths[ci]-runeWidth(val))
+		padded := val + strings.Repeat(" ", m.colWidths[ci]-stringutil.RuneWidth(val))
 		cell := " " + padded + " "
 
 		if isHeader {
@@ -518,7 +558,7 @@ func calculateColWidths(columns []string, rows [][]string) []int {
 	widths := make([]int, len(columns))
 
 	for i, col := range columns {
-		widths[i] = runeWidth(col)
+		widths[i] = stringutil.RuneWidth(col)
 	}
 
 	checkRows := len(rows)
@@ -528,7 +568,7 @@ func calculateColWidths(columns []string, rows [][]string) []int {
 	for _, row := range rows[:checkRows] {
 		for i, cell := range row {
 			if i < len(widths) {
-				w := runeWidth(cell)
+				w := stringutil.RuneWidth(cell)
 				if w > widths[i] {
 					widths[i] = w
 				}
@@ -548,45 +588,3 @@ func calculateColWidths(columns []string, rows [][]string) []int {
 	return widths
 }
 
-func truncate(s string, maxLen int) string {
-	if runeWidth(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	runes := []rune(s)
-	w := 0
-	for i, r := range runes {
-		w += charWidth(r)
-		if w > maxLen-3 {
-			return string(runes[:i]) + "..."
-		}
-	}
-	return s
-}
-
-func runeWidth(s string) int {
-	w := 0
-	for _, r := range s {
-		w += charWidth(r)
-	}
-	return w
-}
-
-func charWidth(r rune) int {
-	if r >= 0x1100 &&
-		(r <= 0x115f || r == 0x2329 || r == 0x232a ||
-			(r >= 0x2e80 && r <= 0xa4cf && r != 0x303f) ||
-			(r >= 0xac00 && r <= 0xd7a3) ||
-			(r >= 0xf900 && r <= 0xfaff) ||
-			(r >= 0xfe10 && r <= 0xfe19) ||
-			(r >= 0xfe30 && r <= 0xfe6f) ||
-			(r >= 0xff00 && r <= 0xff60) ||
-			(r >= 0xffe0 && r <= 0xffe6) ||
-			(r >= 0x20000 && r <= 0x2fffd) ||
-			(r >= 0x30000 && r <= 0x3fffd)) {
-		return 2
-	}
-	return 1
-}

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -69,6 +70,38 @@ func (db *DB) User() string {
 // Host returns the connected host.
 func (db *DB) Host() string {
 	return db.config.Host
+}
+
+// SwitchDatabase changes the active database.
+func (db *DB) SwitchDatabase(ctx context.Context, name string) error {
+	if err := validIdentifier(name); err != nil {
+		return err
+	}
+	_, err := db.conn.ExecContext(ctx, fmt.Sprintf("USE `%s`", name))
+	if err != nil {
+		return err
+	}
+	db.config.Database = name
+	return nil
+}
+
+// ListDatabases returns all accessible databases.
+func (db *DB) ListDatabases(ctx context.Context) ([]string, error) {
+	rows, err := db.conn.QueryContext(ctx, "SHOW DATABASES")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var databases []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		databases = append(databases, name)
+	}
+	return databases, rows.Err()
 }
 
 func buildDSN(cfg ConnectionConfig) (string, error) {

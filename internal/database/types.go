@@ -41,10 +41,11 @@ type SchemaInfo struct {
 
 // QueryResult holds the output of an executed query.
 type QueryResult struct {
-	Columns      []string
-	Rows         [][]string
-	RowCount     int
-	AffectedRows int64
-	Duration     time.Duration
-	IsSelect     bool
+	Columns         []string
+	Rows            [][]string
+	RowCount        int
+	AffectedRows    int64
+	Duration        time.Duration
+	IsSelect        bool
+	DatabaseChanged string // non-empty if a USE command changed the database
 }

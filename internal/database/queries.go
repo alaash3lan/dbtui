@@ -1,12 +1,13 @@
 package database
 
 import (
+	"context"
 	"fmt"
 )
 
 // ListTables returns all tables in the current database with basic metadata.
-func (db *DB) ListTables() ([]TableInfo, error) {
-	rows, err := db.conn.Query("SHOW TABLE STATUS")
+func (db *DB) ListTables(ctx context.Context) ([]TableInfo, error) {
+	rows, err := db.conn.QueryContext(ctx, "SHOW TABLE STATUS")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
@@ -58,11 +59,14 @@ func (db *DB) ListTables() ([]TableInfo, error) {
 }
 
 // DescribeTable returns full schema information for a table.
-func (db *DB) DescribeTable(name string) (*SchemaInfo, error) {
+func (db *DB) DescribeTable(ctx context.Context, name string) (*SchemaInfo, error) {
+	if err := validIdentifier(name); err != nil {
+		return nil, err
+	}
 	info := &SchemaInfo{TableName: name}
 
 	// Get column details
-	rows, err := db.conn.Query(fmt.Sprintf("DESCRIBE `%s`", name))
+	rows, err := db.conn.QueryContext(ctx, fmt.Sprintf("DESCRIBE `%s`", name))
 	if err != nil {
 		return nil, fmt.Errorf("failed to describe table: %w", err)
 	}
@@ -93,7 +97,7 @@ func (db *DB) DescribeTable(name string) (*SchemaInfo, error) {
 		collation string
 		rows      int64
 	}
-	row := db.conn.QueryRow("SELECT ENGINE, TABLE_COLLATION, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", name)
+	row := db.conn.QueryRowContext(ctx, "SELECT ENGINE, TABLE_COLLATION, TABLE_ROWS FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?", name)
 	if err := row.Scan(&tableStatus.engine, &tableStatus.collation, &tableStatus.rows); err == nil {
 		info.Engine = tableStatus.engine
 		info.Collation = tableStatus.collation

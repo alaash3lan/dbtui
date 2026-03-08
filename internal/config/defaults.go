@@ -9,4 +9,5 @@ const (
 	DefaultEditorHeight = 8  // lines
 	DefaultTheme        = "dark"
 	DefaultHistoryMax   = 500
+	DefaultQueryTimeout = 30 // seconds
 )

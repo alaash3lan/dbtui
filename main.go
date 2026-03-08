@@ -3,10 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/alaa/dbplus/cmd"
+	"github.com/alaa/dbplus/internal/config"
 	"github.com/alaa/dbplus/internal/database"
 	"github.com/alaa/dbplus/internal/tui"
 )
@@ -26,7 +28,9 @@ func main() {
 	}
 	defer db.Close()
 
-	model := tui.New(db, cmd.Version())
+	appCfg := config.Load()
+	queryTimeout := time.Duration(appCfg.Query.TimeoutSeconds) * time.Second
+	model := tui.New(db, cmd.Version(), queryTimeout)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {

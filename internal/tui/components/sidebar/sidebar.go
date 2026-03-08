@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/alaa/dbplus/internal/database"
+	"github.com/alaa/dbplus/internal/stringutil"
 )
 
 // TableSelectedMsg is emitted when a table is selected.
@@ -28,17 +29,6 @@ type Colors struct {
 	Border      lipgloss.Color
 	FocusBorder lipgloss.Color
 	ActiveBg    lipgloss.Color
-}
-
-// DefaultColors returns dark theme colors.
-func DefaultColors() Colors {
-	return Colors{
-		Highlight:   lipgloss.Color("#7DC4E4"),
-		Subtle:      lipgloss.Color("#626262"),
-		Border:      lipgloss.Color("#444444"),
-		FocusBorder: lipgloss.Color("#7DC4E4"),
-		ActiveBg:    lipgloss.Color("#313244"),
-	}
 }
 
 // KeyMap defines sidebar-specific keybindings.
@@ -100,7 +90,6 @@ func New(dbName string) Model {
 	return Model{
 		dbName: dbName,
 		keyMap: DefaultKeyMap(),
-		colors: DefaultColors(),
 	}
 }
 
@@ -115,6 +104,11 @@ func (m *Model) SetTables(tables []database.TableInfo) {
 // SetSchemaInfo updates the schema info display.
 func (m *Model) SetSchemaInfo(info *database.SchemaInfo) {
 	m.schemaInfo = info
+}
+
+// SetDBName updates the database name header.
+func (m *Model) SetDBName(name string) {
+	m.dbName = name
 }
 
 // SetFocused sets focus state.
@@ -233,7 +227,7 @@ func (m Model) View() string {
 		}
 
 		for i := start; i < end; i++ {
-			name := truncate(m.tables[i].Name, contentWidth-2)
+			name := stringutil.TruncateSimple(m.tables[i].Name, contentWidth-2)
 			if i == m.cursor {
 				b.WriteString(activeStyle.Width(contentWidth).Render(fmt.Sprintf("> %s", name)))
 			} else {
@@ -277,16 +271,6 @@ func (m Model) View() string {
 		Width(contentWidth).
 		Height(m.height - 2).
 		Render(content)
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return s[:maxLen]
-	}
-	return s[:maxLen-3] + "..."
 }
 
 func maxInt(a, b int) int {

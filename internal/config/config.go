@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -11,6 +12,12 @@ import (
 type Config struct {
 	Display DisplayConfig `toml:"display"`
 	History HistoryConfig `toml:"history"`
+	Query   QueryConfig   `toml:"query"`
+}
+
+// QueryConfig holds query execution settings.
+type QueryConfig struct {
+	TimeoutSeconds int `toml:"timeout_seconds"`
 }
 
 // DisplayConfig holds UI-related settings.
@@ -42,6 +49,9 @@ func Load() *Config {
 			SaveToFile: true,
 			File:       defaultHistoryPath(),
 		},
+		Query: QueryConfig{
+			TimeoutSeconds: DefaultQueryTimeout,
+		},
 	}
 
 	configPath := findConfigFile()
@@ -49,7 +59,9 @@ func Load() *Config {
 		return cfg
 	}
 
-	toml.DecodeFile(configPath, cfg)
+	if _, err := toml.DecodeFile(configPath, cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to parse config %s: %v\n", configPath, err)
+	}
 	return cfg
 }
 

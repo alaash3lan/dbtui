@@ -1,42 +1,76 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 )
 
+// validIdentifier rejects table/column names that could cause SQL injection.
+func validIdentifier(name string) error {
+	if name == "" {
+		return fmt.Errorf("identifier cannot be empty")
+	}
+	if strings.ContainsAny(name, "`\x00") {
+		return fmt.Errorf("identifier contains invalid characters: %q", name)
+	}
+	return nil
+}
+
 // FetchTableData runs SELECT * with pagination on a table.
-func (db *DB) FetchTableData(table string, limit, offset int) (*QueryResult, error) {
+func (db *DB) FetchTableData(ctx context.Context, table string, limit, offset int) (*QueryResult, error) {
+	if err := validIdentifier(table); err != nil {
+		return nil, err
+	}
 	query := fmt.Sprintf("SELECT * FROM `%s` LIMIT %d OFFSET %d", table, limit, offset)
-	return db.executeSelect(query)
+	return db.executeSelect(ctx, query)
 }
 
 // Execute runs an arbitrary SQL statement and returns results.
-func (db *DB) Execute(query string) (*QueryResult, error) {
+func (db *DB) Execute(ctx context.Context, query string) (*QueryResult, error) {
 	trimmed := strings.TrimSpace(strings.ToUpper(query))
+
+	// Detect USE database
+	if strings.HasPrefix(trimmed, "USE ") {
+		dbName := strings.TrimSpace(query[4:])
+		dbName = strings.TrimRight(dbName, ";")
+		dbName = strings.TrimSpace(dbName)
+		dbName = strings.Trim(dbName, "`")
+		if err := db.SwitchDatabase(ctx, dbName); err != nil {
+			return nil, err
+		}
+		return &QueryResult{
+			IsSelect:     false,
+			AffectedRows: 0,
+			DatabaseChanged: dbName,
+		}, nil
+	}
 
 	// Detect SELECT queries
 	if strings.HasPrefix(trimmed, "SELECT") || strings.HasPrefix(trimmed, "SHOW") ||
 		strings.HasPrefix(trimmed, "DESCRIBE") || strings.HasPrefix(trimmed, "EXPLAIN") {
-		return db.executeSelect(query)
+		return db.executeSelect(ctx, query)
 	}
 
-	return db.executeExec(query)
+	return db.executeExec(ctx, query)
 }
 
 // CountRows returns the total row count for a table.
-func (db *DB) CountRows(table string) (int64, error) {
+func (db *DB) CountRows(ctx context.Context, table string) (int64, error) {
+	if err := validIdentifier(table); err != nil {
+		return 0, err
+	}
 	var count int64
-	err := db.conn.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s`", table)).Scan(&count)
+	err := db.conn.QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM `%s`", table)).Scan(&count)
 	return count, err
 }
 
-func (db *DB) executeSelect(query string) (*QueryResult, error) {
+func (db *DB) executeSelect(ctx context.Context, query string) (*QueryResult, error) {
 	start := time.Now()
 
-	rows, err := db.conn.Query(query)
+	rows, err := db.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -47,7 +81,10 @@ func (db *DB) executeSelect(query string) (*QueryResult, error) {
 		return nil, err
 	}
 
-	columnTypes, _ := rows.ColumnTypes()
+	columnTypes, err := rows.ColumnTypes()
+	if err != nil {
+		columnTypes = nil
+	}
 
 	var result [][]string
 	for rows.Next() {
@@ -81,10 +118,10 @@ func (db *DB) executeSelect(query string) (*QueryResult, error) {
 	}, nil
 }
 
-func (db *DB) executeExec(query string) (*QueryResult, error) {
+func (db *DB) executeExec(ctx context.Context, query string) (*QueryResult, error) {
 	start := time.Now()
 
-	res, err := db.conn.Exec(query)
+	res, err := db.conn.ExecContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}

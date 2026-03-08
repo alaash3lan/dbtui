@@ -19,18 +19,14 @@ type TableSelectedMsg struct {
 
 // QueryResultMsg is sent when a query finishes executing.
 type QueryResultMsg struct {
-	Columns      []string
-	Rows         [][]string
-	RowCount     int
-	AffectedRows int64
-	Duration     time.Duration
-	IsSelect     bool
-	Err          error
-}
-
-// ExecuteQueryMsg is sent when the user submits SQL from the editor.
-type ExecuteQueryMsg struct {
-	SQL string
+	Columns         []string
+	Rows            [][]string
+	RowCount        int
+	AffectedRows    int64
+	Duration        time.Duration
+	IsSelect        bool
+	Err             error
+	DatabaseChanged string
 }
 
 // SchemaInfoMsg is sent when schema info has been fetched.

@@ -4,13 +4,14 @@ import "github.com/charmbracelet/bubbles/key"
 
 // KeyMap defines all global keybindings.
 type KeyMap struct {
-	Quit       key.Binding
-	FocusNext  key.Binding
-	FocusPrev  key.Binding
-	Help       key.Binding
+	Quit          key.Binding
+	FocusNext     key.Binding
+	FocusPrev     key.Binding
+	Help          key.Binding
 	GrowSidebar   key.Binding
 	ShrinkSidebar key.Binding
 	ToggleTheme   key.Binding
+	Refresh       key.Binding
 }
 
 // DefaultKeyMap returns the default set of keybindings.
@@ -43,6 +44,10 @@ func DefaultKeyMap() KeyMap {
 		ToggleTheme: key.NewBinding(
 			key.WithKeys("ctrl+t"),
 			key.WithHelp("ctrl+t", "toggle theme"),
+		),
+		Refresh: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "refresh"),
 		),
 	}
 }

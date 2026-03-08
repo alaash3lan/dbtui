@@ -13,15 +13,6 @@ type Colors struct {
 	Background lipgloss.Color
 }
 
-// DefaultColors returns dark theme colors.
-func DefaultColors() Colors {
-	return Colors{
-		Highlight:  lipgloss.Color("#7DC4E4"),
-		Text:       lipgloss.Color("#CDD6F4"),
-		Background: lipgloss.Color("#1E1E2E"),
-	}
-}
-
 // Model represents the title bar state.
 type Model struct {
 	version  string
@@ -32,7 +23,7 @@ type Model struct {
 
 // New creates a new title bar.
 func New(version string) Model {
-	return Model{version: version, colors: DefaultColors()}
+	return Model{version: version}
 }
 
 // SetRowCount updates the displayed row count.

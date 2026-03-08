@@ -1,30 +1,60 @@
 package database
 
 import (
+	"context"
+	"os"
+	"strconv"
 	"testing"
 )
 
+func testConfig() ConnectionConfig {
+	user := os.Getenv("DBPLUS_TEST_USER")
+	if user == "" {
+		user = "root"
+	}
+	pass := os.Getenv("DBPLUS_TEST_PASS")
+	if pass == "" {
+		pass = "root"
+	}
+	host := os.Getenv("DBPLUS_TEST_HOST")
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := 3306
+	if p := os.Getenv("DBPLUS_TEST_PORT"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil {
+			port = v
+		}
+	}
+	db := os.Getenv("DBPLUS_TEST_DB")
+	if db == "" {
+		db = "dbplus_test"
+	}
+	return ConnectionConfig{
+		User:     user,
+		Password: pass,
+		Host:     host,
+		Port:     port,
+		Database: db,
+	}
+}
+
 func TestBuildDSN(t *testing.T) {
+	cfg := testConfig()
 	tests := []struct {
 		name    string
 		cfg     ConnectionConfig
 		wantErr bool
 	}{
 		{
-			name: "standard connection",
-			cfg: ConnectionConfig{
-				User:     "root",
-				Password: "root",
-				Host:     "127.0.0.1",
-				Port:     3306,
-				Database: "dbplus_test",
-			},
+			name:    "standard connection",
+			cfg:     cfg,
 			wantErr: false,
 		},
 		{
 			name: "dsn override",
 			cfg: ConnectionConfig{
-				DSN: "root:root@tcp(127.0.0.1:3306)/dbplus_test",
+				DSN: cfg.User + ":" + cfg.Password + "@tcp(" + cfg.Host + ":" + strconv.Itoa(cfg.Port) + ")/" + cfg.Database,
 			},
 			wantErr: false,
 		},
@@ -37,7 +67,7 @@ func TestBuildDSN(t *testing.T) {
 		},
 		{
 			name:    "default host and port",
-			cfg:     ConnectionConfig{User: "root", Password: "root"},
+			cfg:     ConnectionConfig{User: cfg.User, Password: cfg.Password},
 			wantErr: false,
 		},
 	}
@@ -57,13 +87,7 @@ func TestBuildDSN(t *testing.T) {
 }
 
 func TestIntegration(t *testing.T) {
-	cfg := ConnectionConfig{
-		User:     "root",
-		Password: "root",
-		Host:     "127.0.0.1",
-		Port:     3306,
-		Database: "dbplus_test",
-	}
+	cfg := testConfig()
 
 	db, err := New(cfg)
 	if err != nil {
@@ -71,8 +95,10 @@ func TestIntegration(t *testing.T) {
 	}
 	defer db.Close()
 
+	ctx := context.Background()
+
 	// Test ListTables
-	tables, err := db.ListTables()
+	tables, err := db.ListTables(ctx)
 	if err != nil {
 		t.Fatalf("ListTables() error: %v", err)
 	}
@@ -91,7 +117,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Test DescribeTable
-	schema, err := db.DescribeTable("products")
+	schema, err := db.DescribeTable(ctx, "products")
 	if err != nil {
 		t.Fatalf("DescribeTable() error: %v", err)
 	}
@@ -103,7 +129,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Test FetchTableData
-	result, err := db.FetchTableData("products", 100, 0)
+	result, err := db.FetchTableData(ctx, "products", 100, 0)
 	if err != nil {
 		t.Fatalf("FetchTableData() error: %v", err)
 	}
@@ -115,7 +141,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Test Execute SELECT
-	result, err = db.Execute("SELECT * FROM customers WHERE city = 'New York'")
+	result, err = db.Execute(ctx, "SELECT * FROM customers WHERE city = 'New York'")
 	if err != nil {
 		t.Fatalf("Execute() SELECT error: %v", err)
 	}
@@ -127,7 +153,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Test CountRows
-	count, err := db.CountRows("customers")
+	count, err := db.CountRows(ctx, "customers")
 	if err != nil {
 		t.Fatalf("CountRows() error: %v", err)
 	}
@@ -136,7 +162,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Test NULL handling
-	result, err = db.Execute("SELECT email FROM customers WHERE name = 'Ivy Chen'")
+	result, err = db.Execute(ctx, "SELECT email FROM customers WHERE name = 'Ivy Chen'")
 	if err != nil {
 		t.Fatalf("Execute() NULL test error: %v", err)
 	}
@@ -145,7 +171,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Test Execute INSERT
-	result, err = db.Execute("INSERT INTO customers (name, email, city) VALUES ('Test User', 'test@test.com', 'TestCity')")
+	result, err = db.Execute(ctx, "INSERT INTO customers (name, email, city) VALUES ('Test User', 'test@test.com', 'TestCity')")
 	if err != nil {
 		t.Fatalf("Execute() INSERT error: %v", err)
 	}
@@ -157,7 +183,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	// Cleanup
-	db.Execute("DELETE FROM customers WHERE name = 'Test User'")
+	db.Execute(ctx, "DELETE FROM customers WHERE name = 'Test User'")
 
 	t.Logf("All integration tests passed. Tables: %d, Products: %d rows", len(tables), 12)
 }

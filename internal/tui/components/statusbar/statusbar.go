@@ -14,15 +14,6 @@ type Colors struct {
 	Background lipgloss.Color
 }
 
-// DefaultColors returns dark theme colors.
-func DefaultColors() Colors {
-	return Colors{
-		Highlight:  lipgloss.Color("#7DC4E4"),
-		Text:       lipgloss.Color("#CDD6F4"),
-		Background: lipgloss.Color("#1E1E2E"),
-	}
-}
-
 // Model represents the status bar state.
 type Model struct {
 	dbName    string
@@ -40,8 +31,12 @@ func New(dbName, user, host string) Model {
 		dbName: dbName,
 		user:   user,
 		host:   host,
-		colors: DefaultColors(),
 	}
+}
+
+// SetDBName updates the displayed database name.
+func (m *Model) SetDBName(name string) {
+	m.dbName = name
 }
 
 // SetQueryInfo updates the last query stats.

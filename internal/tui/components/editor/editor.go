@@ -61,19 +61,6 @@ type Colors struct {
 	WarningColor lipgloss.Color
 }
 
-// DefaultColors returns dark theme colors.
-func DefaultColors() Colors {
-	return Colors{
-		Highlight:    lipgloss.Color("#7DC4E4"),
-		Subtle:       lipgloss.Color("#626262"),
-		Border:       lipgloss.Color("#444444"),
-		FocusBorder:  lipgloss.Color("#7DC4E4"),
-		ErrorColor:   lipgloss.Color("#F38BA8"),
-		SuccessColor: lipgloss.Color("#A6E3A1"),
-		WarningColor: lipgloss.Color("#F9E2AF"),
-	}
-}
-
 // Model represents the query editor state.
 type Model struct {
 	textarea    textarea.Model
@@ -104,7 +91,6 @@ func New() Model {
 		textarea: ta,
 		history:  NewHistoryRing(100),
 		keyMap:   DefaultKeyMap(),
-		colors:   DefaultColors(),
 	}
 }
 
@@ -185,14 +171,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keyMap.Execute):
 			val := strings.TrimSpace(m.textarea.Value())
-			if val == "" {
-				return m, nil
-			}
-			// Execute if it ends with ; or is a single line
-			if strings.HasSuffix(val, ";") || !strings.Contains(val, "\n") {
+			if val != "" && strings.HasSuffix(val, ";") {
 				return m.execute()
 			}
-			// Otherwise let textarea handle Enter for newline
+			// No semicolon — insert newline
 			var cmd tea.Cmd
 			m.textarea, cmd = m.textarea.Update(msg)
 			return m, cmd

@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,11 +34,12 @@ const editorHeightRatio = 0.30
 
 // Model is the root Bubble Tea model.
 type Model struct {
-	db       *database.DB
-	keyMap   KeyMap
-	styles   Styles
-	theme    Theme
-	version  string
+	db           *database.DB
+	keyMap       KeyMap
+	styles       Styles
+	theme        Theme
+	version      string
+	queryTimeout time.Duration
 
 	// Components
 	sidebar   sidebar.Model
@@ -57,16 +60,19 @@ type Model struct {
 	ready        bool
 	err          error
 	showHelp     bool
+	cancelQuery  context.CancelFunc
+	queryRunning bool
 }
 
 // New creates the root model.
-func New(db *database.DB, version string) Model {
+func New(db *database.DB, version string, queryTimeout time.Duration) Model {
 	m := Model{
 		db:           db,
 		keyMap:       DefaultKeyMap(),
 		styles:       DefaultStyles(),
 		theme:        DarkTheme(),
 		version:      version,
+		queryTimeout: queryTimeout,
 		sidebar:      sidebar.New(db.DatabaseName()),
 		dataView:     dataview.New(),
 		editor:       editor.New(),
@@ -99,6 +105,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Global keys handled first
 		switch {
 		case key.Matches(msg, m.keyMap.Quit):
+			if m.queryRunning && m.cancelQuery != nil {
+				m.cancelQuery()
+				m.cancelQuery = nil
+				return m, nil
+			}
 			return m, tea.Quit
 		case key.Matches(msg, m.keyMap.FocusNext):
 			m.cycleFocus(1)
@@ -127,6 +138,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.applyTheme()
 			return m, nil
+		case key.Matches(msg, m.keyMap.Refresh):
+			batch := []tea.Cmd{m.fetchTableListCmd()}
+			if m.currentTable != "" {
+				batch = append(batch, m.fetchTableDataCmd(m.currentTable), m.fetchCountCmd(m.currentTable))
+			}
+			return m, tea.Batch(batch...)
 		}
 
 	case TableListMsg:
@@ -152,11 +169,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case editor.ExecuteQueryMsg:
 		m.editor.SetRunning(true)
+		m.queryRunning = true
 		m.err = nil
 		return m, m.executeQueryCmd(msg.SQL)
 
 	case QueryResultMsg:
 		m.editor.SetRunning(false)
+		m.queryRunning = false
+		m.cancelQuery = nil
 		if msg.Err != nil {
 			m.editor.SetError(msg.Err.Error())
 			return m, nil
@@ -172,16 +192,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusBar.SetQueryInfo(msg.Duration, msg.RowCount)
 			m.editor.SetResult(fmt.Sprintf("%d rows in %s", msg.RowCount, msg.Duration))
 		} else {
+			// Handle database switch
+			if msg.DatabaseChanged != "" {
+				m.sidebar.SetDBName(msg.DatabaseChanged)
+				m.statusBar.SetDBName(msg.DatabaseChanged)
+				m.currentTable = ""
+				m.dataView.SetData("", nil, nil)
+				m.editor.SetResult(fmt.Sprintf("Database changed to %s", msg.DatabaseChanged))
+				return m, m.fetchTableListCmd()
+			}
 			m.editor.SetResult(fmt.Sprintf("%d rows affected in %s", msg.AffectedRows, msg.Duration))
 			m.statusBar.SetQueryInfo(msg.Duration, int(msg.AffectedRows))
-			// Refresh current table data if we had one selected
+			// Refresh table list (handles CREATE/DROP TABLE) and current table data
+			batch := []tea.Cmd{m.fetchTableListCmd()}
 			if m.currentTable != "" {
-				return m, tea.Batch(
-					m.fetchTableDataCmd(m.currentTable),
-					m.fetchCountCmd(m.currentTable),
-				)
+				batch = append(batch, m.fetchTableDataCmd(m.currentTable), m.fetchCountCmd(m.currentTable))
 			}
+			return m, tea.Batch(batch...)
 		}
+
+	case dataview.PageRequestMsg:
+		return m, m.fetchPageCmd(msg.Table, msg.Page, msg.Offset, msg.Limit)
+
+	case pageDataMsg:
+		if msg.err != nil {
+			m.err = msg.err
+			return m, nil
+		}
+		m.dataView.SetData(msg.table, msg.columns, msg.rows)
+		m.dataView.SetPageDirect(msg.page)
+		m.titleBar.SetRowCount(len(msg.rows))
+		return m, nil
 
 	case tableCountMsg:
 		m.dataView.SetPage(0, msg.count)
@@ -315,8 +356,9 @@ func (m *Model) cycleFocus(dir int) {
 // tea.Cmd factories
 
 func (m Model) fetchTableListCmd() tea.Cmd {
+	db := m.db
 	return func() tea.Msg {
-		tables, err := m.db.ListTables()
+		tables, err := db.ListTables(context.Background())
 		return TableListMsg{Tables: tables, Err: err}
 	}
 }
@@ -325,7 +367,7 @@ func (m Model) fetchTableDataCmd(table string) tea.Cmd {
 	db := m.db
 	pageSize := m.dataView.PageSize()
 	return func() tea.Msg {
-		result, err := db.FetchTableData(table, pageSize, 0)
+		result, err := db.FetchTableData(context.Background(), table, pageSize, 0)
 		if err != nil {
 			return QueryResultMsg{Err: err}
 		}
@@ -339,32 +381,61 @@ func (m Model) fetchTableDataCmd(table string) tea.Cmd {
 	}
 }
 
-func (m Model) executeQueryCmd(sql string) tea.Cmd {
+func (m *Model) executeQueryCmd(sql string) tea.Cmd {
 	db := m.db
+	timeout := m.queryTimeout
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	m.cancelQuery = cancel
 	return func() tea.Msg {
-		result, err := db.Execute(sql)
+		defer cancel()
+		result, err := db.Execute(ctx, sql)
 		if err != nil {
 			return QueryResultMsg{Err: err}
 		}
 		return QueryResultMsg{
-			Columns:      result.Columns,
-			Rows:         result.Rows,
-			RowCount:     result.RowCount,
-			AffectedRows: result.AffectedRows,
-			Duration:     result.Duration,
-			IsSelect:     result.IsSelect,
+			Columns:         result.Columns,
+			Rows:            result.Rows,
+			RowCount:        result.RowCount,
+			AffectedRows:    result.AffectedRows,
+			Duration:        result.Duration,
+			IsSelect:        result.IsSelect,
+			DatabaseChanged: result.DatabaseChanged,
 		}
 	}
+}
+
+type pageDataMsg struct {
+	table   string
+	page    int
+	columns []string
+	rows    [][]string
+	err     error
 }
 
 type tableCountMsg struct {
 	count int64
 }
 
+func (m Model) fetchPageCmd(table string, page, offset, limit int) tea.Cmd {
+	db := m.db
+	return func() tea.Msg {
+		result, err := db.FetchTableData(context.Background(), table, limit, offset)
+		if err != nil {
+			return pageDataMsg{table: table, page: page, err: err}
+		}
+		return pageDataMsg{
+			table:   table,
+			page:    page,
+			columns: result.Columns,
+			rows:    result.Rows,
+		}
+	}
+}
+
 func (m Model) fetchCountCmd(table string) tea.Cmd {
 	db := m.db
 	return func() tea.Msg {
-		count, err := db.CountRows(table)
+		count, err := db.CountRows(context.Background(), table)
 		if err != nil {
 			return tableCountMsg{count: 0}
 		}
@@ -375,7 +446,7 @@ func (m Model) fetchCountCmd(table string) tea.Cmd {
 func (m Model) fetchSchemaCmd(table string) tea.Cmd {
 	db := m.db
 	return func() tea.Msg {
-		info, err := db.DescribeTable(table)
+		info, err := db.DescribeTable(context.Background(), table)
 		return SchemaInfoMsg{Info: info, Err: err}
 	}
 }
@@ -396,6 +467,7 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  Ctrl+Left   ") + desc.Render("Shrink sidebar") + "\n"
 	help += keyStyle.Render("  Ctrl+Right  ") + desc.Render("Grow sidebar") + "\n"
 	help += keyStyle.Render("  Ctrl+T      ") + desc.Render("Toggle dark/light theme") + "\n"
+	help += keyStyle.Render("  Ctrl+R      ") + desc.Render("Refresh tables & data") + "\n"
 	help += keyStyle.Render("  F1          ") + desc.Render("Toggle this help") + "\n\n"
 
 	help += title.Render("Sidebar") + "\n"
@@ -412,10 +484,14 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  Home/End    ") + desc.Render("First/last row") + "\n\n"
 
 	help += title.Render("Query Editor") + "\n"
-	help += keyStyle.Render("  Enter       ") + desc.Render("Execute (if ends with ;)") + "\n"
+	help += keyStyle.Render("  Enter       ") + desc.Render("Execute (requires ;) or newline") + "\n"
 	help += keyStyle.Render("  Ctrl+E      ") + desc.Render("Force execute") + "\n"
 	help += keyStyle.Render("  Up/Down     ") + desc.Render("Navigate history") + "\n"
 	help += keyStyle.Render("  Escape      ") + desc.Render("Clear input") + "\n\n"
+
+	help += title.Render("Tips") + "\n"
+	help += desc.Render("  Type USE dbname; to switch databases") + "\n"
+	help += desc.Render("  Ctrl+C cancels running query, press again to quit") + "\n\n"
 
 	help += dim.Render("Press F1 to close")
 
