@@ -8,7 +8,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-// Config holds all dbplus configuration.
+// Config holds all dbtui configuration.
 type Config struct {
 	Display DisplayConfig `toml:"display"`
 	History HistoryConfig `toml:"history"`
@@ -68,25 +68,25 @@ func Load() *Config {
 func findConfigFile() string {
 	// Check XDG config dir first
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		p := filepath.Join(xdg, "dbplus", "config.toml")
+		p := filepath.Join(xdg, "dbtui", "config.toml")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 
-	// Check ~/.config/dbplus/
+	// Check ~/.config/dbtui/
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
 
-	p := filepath.Join(home, ".config", "dbplus", "config.toml")
+	p := filepath.Join(home, ".config", "dbtui", "config.toml")
 	if _, err := os.Stat(p); err == nil {
 		return p
 	}
 
-	// Check ~/.dbplus.toml
-	p = filepath.Join(home, ".dbplus.toml")
+	// Check ~/.dbtui.toml
+	p = filepath.Join(home, ".dbtui.toml")
 	if _, err := os.Stat(p); err == nil {
 		return p
 	}
@@ -99,5 +99,5 @@ func defaultHistoryPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "dbplus", "history")
+	return filepath.Join(home, ".config", "dbtui", "history")
 }

@@ -40,6 +40,14 @@ type ConnectionErrorMsg struct {
 	Err error
 }
 
+// reconnectMsg triggers a reconnect attempt.
+type reconnectMsg struct{}
+
+// reconnectResultMsg carries the result of a reconnect attempt.
+type reconnectResultMsg struct {
+	Err error
+}
+
 // FilterChangedMsg is sent when the data filter changes.
 type FilterChangedMsg struct {
 	Column string

@@ -74,10 +74,12 @@ type Model struct {
 	keyMap      KeyMap
 	savedInput  string // saved when navigating history
 	colors      Colors
+	saveToFile  bool
+	historyFile string
 }
 
 // New creates a new editor model.
-func New() Model {
+func New(maxEntries int) Model {
 	ta := textarea.New()
 	ta.Placeholder = "SELECT * FROM ..."
 	ta.Prompt = ""
@@ -87,10 +89,34 @@ func New() Model {
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 
+	if maxEntries <= 0 {
+		maxEntries = 100
+	}
+
 	return Model{
 		textarea: ta,
-		history:  NewHistoryRing(100),
+		history:  NewHistoryRing(maxEntries),
 		keyMap:   DefaultKeyMap(),
+	}
+}
+
+// SetHistoryConfig configures file-based history persistence.
+func (m *Model) SetHistoryConfig(saveToFile bool, filePath string) {
+	m.saveToFile = saveToFile
+	m.historyFile = filePath
+}
+
+// LoadHistory loads history from file if persistence is enabled.
+func (m *Model) LoadHistory() {
+	if m.saveToFile && m.historyFile != "" {
+		_ = m.history.LoadFromFile(m.historyFile)
+	}
+}
+
+// SaveHistory writes history to file if persistence is enabled.
+func (m *Model) SaveHistory() {
+	if m.saveToFile && m.historyFile != "" {
+		_ = m.history.SaveToFile(m.historyFile)
 	}
 }
 

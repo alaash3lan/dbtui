@@ -1,5 +1,11 @@
 package editor
 
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
+
 // HistoryRing is a fixed-size ring buffer for query history.
 type HistoryRing struct {
 	entries []string
@@ -74,4 +80,46 @@ func (h *HistoryRing) Reset() {
 // Len returns the number of entries.
 func (h *HistoryRing) Len() int {
 	return len(h.entries)
+}
+
+// Entries returns a copy of all history entries.
+func (h *HistoryRing) Entries() []string {
+	out := make([]string, len(h.entries))
+	copy(out, h.entries)
+	return out
+}
+
+// LoadFromFile reads history from a file. Each line is one query;
+// literal newlines within queries are escaped as \n.
+func (h *HistoryRing) LoadFromFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		query := strings.ReplaceAll(line, `\n`, "\n")
+		h.Push(query)
+	}
+	return nil
+}
+
+// SaveToFile writes history entries to a file, creating parent
+// directories if needed. Newlines within queries are escaped as \n.
+func (h *HistoryRing) SaveToFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+
+	var b strings.Builder
+	for _, entry := range h.entries {
+		line := strings.ReplaceAll(entry, "\n", `\n`)
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

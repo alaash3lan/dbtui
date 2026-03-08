@@ -17,7 +17,7 @@ func main() {
 	cfg, err := cmd.ParseFlags()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Run 'dbplus --help' for usage.\n")
+		fmt.Fprintf(os.Stderr, "Run 'dbtui --help' for usage.\n")
 		os.Exit(1)
 	}
 
@@ -30,11 +30,16 @@ func main() {
 
 	appCfg := config.Load()
 	queryTimeout := time.Duration(appCfg.Query.TimeoutSeconds) * time.Second
-	model := tui.New(db, cmd.Version(), queryTimeout, appCfg.Display.PageSize)
+	model := tui.New(db, cmd.Version(), queryTimeout, appCfg.Display.PageSize, appCfg.History)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
-	if _, err := p.Run(); err != nil {
+	finalModel, err := p.Run()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 		os.Exit(1)
+	}
+
+	if m, ok := finalModel.(tui.Model); ok {
+		m.SaveHistory()
 	}
 }

@@ -16,13 +16,14 @@ type Colors struct {
 
 // Model represents the status bar state.
 type Model struct {
-	dbName    string
-	user      string
-	host      string
-	queryTime time.Duration
-	rowCount  int
-	width     int
-	colors    Colors
+	dbName           string
+	user             string
+	host             string
+	queryTime        time.Duration
+	rowCount         int
+	width            int
+	colors           Colors
+	connectionStatus string
 }
 
 // New creates a new status bar.
@@ -50,6 +51,11 @@ func (m *Model) SetWidth(width int) {
 	m.width = width
 }
 
+// SetConnectionStatus updates the displayed connection status.
+func (m *Model) SetConnectionStatus(status string) {
+	m.connectionStatus = status
+}
+
 // SetColors updates the theme colors.
 func (m *Model) SetColors(c Colors) {
 	m.colors = c
@@ -65,6 +71,11 @@ func (m Model) View() string {
 	left := keyStyle.Render("db: ") + valStyle.Render(m.dbName) +
 		sep +
 		keyStyle.Render("User: ") + valStyle.Render(m.user)
+
+	if m.connectionStatus != "" {
+		warnStyle := lipgloss.NewStyle().Foreground(c.Highlight).Bold(true)
+		left += sep + warnStyle.Render(m.connectionStatus)
+	}
 
 	if m.queryTime > 0 {
 		left += sep + keyStyle.Render("Query Time: ") + valStyle.Render(formatDuration(m.queryTime))

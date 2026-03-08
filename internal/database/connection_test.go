@@ -8,27 +8,27 @@ import (
 )
 
 func testConfig() ConnectionConfig {
-	user := os.Getenv("DBPLUS_TEST_USER")
+	user := os.Getenv("DBTUI_TEST_USER")
 	if user == "" {
 		user = "root"
 	}
-	pass := os.Getenv("DBPLUS_TEST_PASS")
+	pass := os.Getenv("DBTUI_TEST_PASS")
 	if pass == "" {
 		pass = "root"
 	}
-	host := os.Getenv("DBPLUS_TEST_HOST")
+	host := os.Getenv("DBTUI_TEST_HOST")
 	if host == "" {
 		host = "127.0.0.1"
 	}
 	port := 3306
-	if p := os.Getenv("DBPLUS_TEST_PORT"); p != "" {
+	if p := os.Getenv("DBTUI_TEST_PORT"); p != "" {
 		if v, err := strconv.Atoi(p); err == nil {
 			port = v
 		}
 	}
-	db := os.Getenv("DBPLUS_TEST_DB")
+	db := os.Getenv("DBTUI_TEST_DB")
 	if db == "" {
-		db = "dbplus_test"
+		db = "dbtui_test"
 	}
 	return ConnectionConfig{
 		User:     user,

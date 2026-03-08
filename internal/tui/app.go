@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/alaa/dbtui/internal/config"
 	"github.com/alaa/dbtui/internal/database"
 	"github.com/alaa/dbtui/internal/tui/components/dataview"
 	"github.com/alaa/dbtui/internal/tui/components/editor"
@@ -65,7 +66,11 @@ type Model struct {
 }
 
 // New creates the root model.
-func New(db *database.DB, version string, queryTimeout time.Duration, pageSize int) Model {
+func New(db *database.DB, version string, queryTimeout time.Duration, pageSize int, historyCfg config.HistoryConfig) Model {
+	ed := editor.New(historyCfg.MaxEntries)
+	ed.SetHistoryConfig(historyCfg.SaveToFile, historyCfg.File)
+	ed.LoadHistory()
+
 	m := Model{
 		db:           db,
 		keyMap:       DefaultKeyMap(),
@@ -75,7 +80,7 @@ func New(db *database.DB, version string, queryTimeout time.Duration, pageSize i
 		queryTimeout: queryTimeout,
 		sidebar:      sidebar.New(db.DatabaseName()),
 		dataView:     dataview.New(pageSize),
-		editor:       editor.New(),
+		editor:       ed,
 		titleBar:     titlebar.New(version),
 		statusBar:    statusbar.New(db.DatabaseName(), db.User(), db.Host()),
 		sidebarRatio: 0.20,
@@ -83,6 +88,11 @@ func New(db *database.DB, version string, queryTimeout time.Duration, pageSize i
 	}
 	m.applyTheme()
 	return m
+}
+
+// SaveHistory persists the editor's query history to disk.
+func (m *Model) SaveHistory() {
+	m.editor.SaveHistory()
 }
 
 // Init implements tea.Model.
@@ -146,8 +156,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(batch...)
 		}
 
+	case reconnectMsg:
+		m.statusBar.SetConnectionStatus("Reconnecting...")
+		return m, m.reconnectCmd()
+
+	case reconnectResultMsg:
+		if msg.Err != nil {
+			m.statusBar.SetConnectionStatus("Disconnected")
+			m.err = fmt.Errorf("reconnect failed: %w", msg.Err)
+			return m, nil
+		}
+		m.statusBar.SetConnectionStatus("")
+		m.err = nil
+		return m, m.fetchTableListCmd()
+
 	case TableListMsg:
 		if msg.Err != nil {
+			if database.IsConnectionError(msg.Err) {
+				return m, func() tea.Msg { return reconnectMsg{} }
+			}
 			m.err = msg.Err
 			return m, nil
 		}
@@ -178,6 +205,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.queryRunning = false
 		m.cancelQuery = nil
 		if msg.Err != nil {
+			if database.IsConnectionError(msg.Err) {
+				m.editor.SetError("Connection lost. Reconnecting...")
+				return m, func() tea.Msg { return reconnectMsg{} }
+			}
 			m.editor.SetError(msg.Err.Error())
 			return m, nil
 		}
@@ -216,6 +247,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pageDataMsg:
 		if msg.err != nil {
+			if database.IsConnectionError(msg.err) {
+				return m, func() tea.Msg { return reconnectMsg{} }
+			}
 			m.err = msg.err
 			return m, nil
 		}
@@ -443,6 +477,14 @@ func (m Model) fetchCountCmd(table string) tea.Cmd {
 	}
 }
 
+func (m Model) reconnectCmd() tea.Cmd {
+	db := m.db
+	return func() tea.Msg {
+		err := db.EnsureConnected()
+		return reconnectResultMsg{Err: err}
+	}
+}
+
 func (m Model) fetchSchemaCmd(table string) tea.Cmd {
 	db := m.db
 	return func() tea.Msg {
@@ -458,7 +500,7 @@ func (m Model) renderHelp() string {
 	desc := lipgloss.NewStyle().Foreground(t.Text)
 	dim := lipgloss.NewStyle().Foreground(t.Subtle)
 
-	help := title.Render("dbplus Keyboard Shortcuts") + "\n\n"
+	help := title.Render("dbtui Keyboard Shortcuts") + "\n\n"
 
 	help += title.Render("Global") + "\n"
 	help += keyStyle.Render("  Ctrl+C      ") + desc.Render("Quit") + "\n"
