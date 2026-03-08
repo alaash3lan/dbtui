@@ -65,7 +65,7 @@ type Model struct {
 }
 
 // New creates the root model.
-func New(db *database.DB, version string, queryTimeout time.Duration) Model {
+func New(db *database.DB, version string, queryTimeout time.Duration, pageSize int) Model {
 	m := Model{
 		db:           db,
 		keyMap:       DefaultKeyMap(),
@@ -74,7 +74,7 @@ func New(db *database.DB, version string, queryTimeout time.Duration) Model {
 		version:      version,
 		queryTimeout: queryTimeout,
 		sidebar:      sidebar.New(db.DatabaseName()),
-		dataView:     dataview.New(),
+		dataView:     dataview.New(pageSize),
 		editor:       editor.New(),
 		titleBar:     titlebar.New(version),
 		statusBar:    statusbar.New(db.DatabaseName(), db.User(), db.Host()),
@@ -225,7 +225,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tableCountMsg:
-		m.dataView.SetPage(0, msg.count)
+		m.dataView.SetTotalRows(msg.count)
 
 	case SchemaInfoMsg:
 		if msg.Err == nil {
@@ -480,7 +480,8 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  arrows/hjkl ") + desc.Render("Scroll grid") + "\n"
 	help += keyStyle.Render("  / Ctrl+F    ") + desc.Render("Activate filter") + "\n"
 	help += keyStyle.Render("  Escape      ") + desc.Render("Clear filter") + "\n"
-	help += keyStyle.Render("  PgUp/PgDn   ") + desc.Render("Page up/down") + "\n"
+	help += keyStyle.Render("  PgUp/PgDn   ") + desc.Render("Scroll viewport up/down") + "\n"
+	help += keyStyle.Render("  n/p         ") + desc.Render("Next/prev server page") + "\n"
 	help += keyStyle.Render("  Home/End    ") + desc.Render("First/last row") + "\n\n"
 
 	help += title.Render("Query Editor") + "\n"

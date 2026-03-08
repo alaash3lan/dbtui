@@ -22,16 +22,18 @@ type PageRequestMsg struct {
 
 // KeyMap defines dataview-specific keybindings.
 type KeyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Left     key.Binding
-	Right    key.Binding
-	PageDown key.Binding
-	PageUp   key.Binding
-	Home     key.Binding
-	End      key.Binding
-	Filter   key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Left        key.Binding
+	Right       key.Binding
+	PageDown    key.Binding
+	PageUp      key.Binding
+	Home        key.Binding
+	End         key.Binding
+	Filter      key.Binding
 	ClearFilter key.Binding
+	NextPage    key.Binding
+	PrevPage    key.Binding
 }
 
 // DefaultKeyMap returns dataview key bindings.
@@ -77,6 +79,14 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("escape"),
 			key.WithHelp("esc", "clear filter"),
 		),
+		NextPage: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "next page"),
+		),
+		PrevPage: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "prev page"),
+		),
 	}
 }
 
@@ -119,37 +129,36 @@ type Model struct {
 	colors     Colors
 }
 
-// New creates a new data view model.
-func New() Model {
+// New creates a new data view model with the given page size.
+func New(pageSize int) Model {
 	fi := textinput.New()
 	fi.Placeholder = "column | value  or  value"
 	fi.Prompt = "Filter: "
 	fi.CharLimit = 256
 
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+
 	return Model{
-		pageSize:    100,
+		pageSize:    pageSize,
 		keyMap:      DefaultKeyMap(),
 		filterInput: fi,
 	}
 }
 
-// SetData loads new query results into the grid.
+// SetData loads new query results into the grid and resets page to 0.
 func (m *Model) SetData(tableName string, columns []string, rows [][]string) {
 	m.tableName = tableName
 	m.columns = columns
 	m.allRows = rows
+	m.page = 0
 	m.cursorRow = 0
 	m.cursorCol = 0
 	m.scrollRow = 0
 	m.scrollCol = 0
 	m.applyFilter()
 	m.colWidths = calculateColWidths(columns, m.rows)
-}
-
-// SetPage sets the current page info.
-func (m *Model) SetPage(page int, totalRows int64) {
-	m.page = page
-	m.totalRows = totalRows
 }
 
 // SetFocused sets focus state.
@@ -171,6 +180,11 @@ func (m *Model) SetSize(width, height int) {
 // SetColors updates the theme colors.
 func (m *Model) SetColors(c Colors) {
 	m.colors = c
+}
+
+// SetTotalRows updates the total row count without changing the current page.
+func (m *Model) SetTotalRows(totalRows int64) {
+	m.totalRows = totalRows
 }
 
 // SetPageDirect sets the page without changing totalRows.
@@ -324,6 +338,30 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					}
 				}
 			}
+		case key.Matches(msg, m.keyMap.NextPage):
+			if m.filterText == "" && m.tableName != "" && m.page+1 < m.TotalPages() {
+				nextPage := m.page + 1
+				return m, func() tea.Msg {
+					return PageRequestMsg{
+						Table:  m.tableName,
+						Page:   nextPage,
+						Offset: nextPage * m.pageSize,
+						Limit:  m.pageSize,
+					}
+				}
+			}
+		case key.Matches(msg, m.keyMap.PrevPage):
+			if m.filterText == "" && m.tableName != "" && m.page > 0 {
+				prevPage := m.page - 1
+				return m, func() tea.Msg {
+					return PageRequestMsg{
+						Table:  m.tableName,
+						Page:   prevPage,
+						Offset: prevPage * m.pageSize,
+						Limit:  m.pageSize,
+					}
+				}
+			}
 		}
 	}
 
@@ -443,16 +481,22 @@ func (m Model) View() string {
 
 	// Pagination footer
 	b.WriteString("\n")
-	totalPages := 1
-	if m.totalRows > 0 {
-		totalPages = int((m.totalRows + int64(m.pageSize) - 1) / int64(m.pageSize))
-	}
-	pageInfo := fmt.Sprintf(" %d rows", len(m.rows))
-	if m.totalRows > 0 && m.filterText == "" {
-		pageInfo = fmt.Sprintf(" %d/%d", m.page+1, totalPages)
+	footerStyle := lipgloss.NewStyle().Foreground(subtle)
+	var pageInfo string
+	if m.filterText != "" {
+		pageInfo = fmt.Sprintf(" %d/%d matched (filtered from page %d, n/p for pages)", len(m.rows), len(m.allRows), m.page+1)
+	} else if m.totalRows > 0 {
+		totalPages := m.TotalPages()
+		startRow := m.page*m.pageSize + 1
+		endRow := startRow + len(m.rows) - 1
+		if endRow < startRow {
+			endRow = startRow
+		}
+		pageInfo = fmt.Sprintf(" rows %d-%d of %d  page %d/%d  (n/p)", startRow, endRow, m.totalRows, m.page+1, totalPages)
+	} else {
+		pageInfo = fmt.Sprintf(" %d rows", len(m.rows))
 	}
 
-	footerStyle := lipgloss.NewStyle().Foreground(subtle)
 	padLen := contentWidth - lipgloss.Width(pageInfo)
 	if padLen < 0 {
 		padLen = 0

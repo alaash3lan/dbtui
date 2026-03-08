@@ -89,7 +89,8 @@ dbplus --version
 | Arrows / `hjkl` | Scroll grid             |
 | `/` / `Ctrl+F`  | Activate filter         |
 | `Escape`      | Clear filter              |
-| `PgUp` / `PgDn` | Page up / down (server-side) |
+| `n` / `p`     | Next / prev server page   |
+| `PgUp` / `PgDn` | Scroll viewport up/down |
 | `Home` / `End`  | First / last row        |
 
 ### Query Editor

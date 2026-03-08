@@ -30,7 +30,7 @@ func main() {
 
 	appCfg := config.Load()
 	queryTimeout := time.Duration(appCfg.Query.TimeoutSeconds) * time.Second
-	model := tui.New(db, cmd.Version(), queryTimeout)
+	model := tui.New(db, cmd.Version(), queryTimeout, appCfg.Display.PageSize)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
