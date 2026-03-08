@@ -2,9 +2,13 @@ package database
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -35,8 +39,9 @@ func IsConnectionError(err error) bool {
 	return false
 }
 
-// DB wraps a sql.DB connection with dbplus-specific operations.
+// DB wraps a sql.DB connection with dbtui-specific operations.
 type DB struct {
+	mu     sync.Mutex
 	conn   *sql.DB
 	config ConnectionConfig
 }
@@ -67,6 +72,8 @@ func New(cfg ConnectionConfig) (*DB, error) {
 
 // Close closes the database connection.
 func (db *DB) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if db.conn != nil {
 		return db.conn.Close()
 	}
@@ -79,8 +86,12 @@ func (db *DB) Ping() error {
 }
 
 // Reconnect closes the existing connection and establishes a new one
-// using the stored config.
+// using the stored config. The mutex protects the conn pointer swap
+// from concurrent readers.
 func (db *DB) Reconnect() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
 	if db.conn != nil {
 		db.conn.Close()
 	}
@@ -214,5 +225,63 @@ func buildDSN(cfg ConnectionConfig) (string, error) {
 		InterpolateParams:    true,
 	}
 
+	// Configure TLS if requested.
+	tlsMode, err := configureTLS(cfg)
+	if err != nil {
+		return "", fmt.Errorf("TLS configuration failed: %w", err)
+	}
+	if tlsMode != "" {
+		mysqlCfg.TLSConfig = tlsMode
+	}
+
 	return mysqlCfg.FormatDSN(), nil
+}
+
+// configureTLS sets up TLS based on the ConnectionConfig and returns the TLS
+// config name to use in the DSN. An empty string means no TLS.
+func configureTLS(cfg ConnectionConfig) (string, error) {
+	if cfg.TLS == "" {
+		return "", nil
+	}
+
+	// Built-in modes supported directly by go-sql-driver/mysql.
+	if cfg.TLS == "true" || cfg.TLS == "skip-verify" {
+		return cfg.TLS, nil
+	}
+
+	// Treat the value as a path to a CA certificate file.
+	if !strings.Contains(cfg.TLS, "/") && !strings.HasSuffix(cfg.TLS, ".pem") {
+		return "", fmt.Errorf("invalid TLS value %q: use \"true\", \"skip-verify\", or a path to a CA cert file", cfg.TLS)
+	}
+
+	caCert, err := os.ReadFile(cfg.TLS)
+	if err != nil {
+		return "", fmt.Errorf("failed to read CA cert %s: %w", cfg.TLS, err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return "", fmt.Errorf("failed to parse CA cert %s", cfg.TLS)
+	}
+
+	tlsCfg := &tls.Config{
+		RootCAs:    caCertPool,
+		MinVersion: tls.VersionTLS12,
+	}
+
+	// Load optional client certificate and key for mutual TLS.
+	if cfg.TLSCert != "" && cfg.TLSKey != "" {
+		clientCert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+		if err != nil {
+			return "", fmt.Errorf("failed to load client cert/key: %w", err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{clientCert}
+	}
+
+	const customTLSName = "dbtui-custom"
+	if err := mysql.RegisterTLSConfig(customTLSName, tlsCfg); err != nil {
+		return "", fmt.Errorf("failed to register TLS config: %w", err)
+	}
+
+	return customTLSName, nil
 }

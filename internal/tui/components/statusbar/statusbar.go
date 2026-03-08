@@ -2,6 +2,7 @@ package statusbar
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -93,10 +94,7 @@ func (m Model) View() string {
 		gap = 1
 	}
 
-	padding := ""
-	for i := 0; i < gap; i++ {
-		padding += " "
-	}
+	padding := strings.Repeat(" ", gap)
 
 	return barStyle.Render(left + padding + right)
 }

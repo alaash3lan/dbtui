@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -63,6 +65,11 @@ type Model struct {
 	showHelp     bool
 	cancelQuery  context.CancelFunc
 	queryRunning bool
+
+	// Database switcher
+	showDBSwitcher bool
+	databases      []string
+	dbCursor       int
 }
 
 // New creates the root model.
@@ -112,6 +119,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ready = true
 
 	case tea.KeyMsg:
+		// Database switcher overlay intercepts all keys when active
+		if m.showDBSwitcher {
+			switch msg.String() {
+			case "esc":
+				m.showDBSwitcher = false
+				return m, nil
+			case "j", "down":
+				if m.dbCursor < len(m.databases)-1 {
+					m.dbCursor++
+				}
+				return m, nil
+			case "k", "up":
+				if m.dbCursor > 0 {
+					m.dbCursor--
+				}
+				return m, nil
+			case "enter":
+				if len(m.databases) > 0 && m.dbCursor < len(m.databases) {
+					selected := m.databases[m.dbCursor]
+					m.showDBSwitcher = false
+					return m, m.switchDatabaseCmd(selected)
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
 		// Global keys handled first
 		switch {
 		case key.Matches(msg, m.keyMap.Quit):
@@ -130,11 +164,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateFocus()
 			return m, nil
 		case key.Matches(msg, m.keyMap.GrowSidebar):
-			m.sidebarRatio = min64(m.sidebarRatio+0.02, 0.40)
+			m.sidebarRatio = min(m.sidebarRatio+0.02, 0.40)
 			m.updateLayout()
 			return m, nil
 		case key.Matches(msg, m.keyMap.ShrinkSidebar):
-			m.sidebarRatio = max64(m.sidebarRatio-0.02, 0.10)
+			m.sidebarRatio = max(m.sidebarRatio-0.02, 0.10)
 			m.updateLayout()
 			return m, nil
 		case key.Matches(msg, m.keyMap.Help):
@@ -154,6 +188,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				batch = append(batch, m.fetchTableDataCmd(m.currentTable), m.fetchCountCmd(m.currentTable))
 			}
 			return m, tea.Batch(batch...)
+		case key.Matches(msg, m.keyMap.ExportCSV):
+			return m, func() tea.Msg { return exportRequestMsg{Format: "csv"} }
+		case key.Matches(msg, m.keyMap.ExportJSON):
+			return m, func() tea.Msg { return exportRequestMsg{Format: "json"} }
+		case key.Matches(msg, m.keyMap.ExplainQuery):
+			val := strings.TrimSpace(m.editor.Value())
+			val = strings.TrimRight(val, "; \t\n\r")
+			if val == "" {
+				return m, nil
+			}
+			sql := "EXPLAIN " + val
+			m.editor.SetRunning(true)
+			m.queryRunning = true
+			m.err = nil
+			return m, m.executeQueryCmd(sql)
+		case key.Matches(msg, m.keyMap.SwitchDB):
+			m.showDBSwitcher = true
+			m.dbCursor = 0
+			return m, m.fetchDatabaseListCmd()
 		}
 
 	case reconnectMsg:
@@ -169,6 +222,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar.SetConnectionStatus("")
 		m.err = nil
 		return m, m.fetchTableListCmd()
+
+	case switchDatabaseResultMsg:
+		if msg.Err != nil {
+			m.err = msg.Err
+			return m, nil
+		}
+		m.sidebar.SetDBName(msg.Name)
+		m.statusBar.SetDBName(msg.Name)
+		m.currentTable = ""
+		m.dataView.SetData("", nil, nil)
+		m.editor.SetResult(fmt.Sprintf("Database changed to %s", msg.Name))
+		return m, m.fetchTableListCmd()
+
+	case databaseListMsg:
+		if msg.Err != nil {
+			m.showDBSwitcher = false
+			m.err = msg.Err
+			return m, nil
+		}
+		m.databases = msg.Databases
+		// Position cursor on current database
+		currentDB := m.db.DatabaseName()
+		for i, db := range m.databases {
+			if db == currentDB {
+				m.dbCursor = i
+				break
+			}
+		}
 
 	case TableListMsg:
 		if msg.Err != nil {
@@ -265,6 +346,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err == nil {
 			m.sidebar.SetSchemaInfo(msg.Info)
 		}
+
+	case exportRequestMsg:
+		columns := m.dataView.Columns()
+		rows := m.dataView.Rows()
+		if len(columns) == 0 || len(rows) == 0 {
+			m.editor.SetError("No data to export")
+			return m, nil
+		}
+		format := msg.Format
+		return m, m.exportCmd(columns, rows, format)
+
+	case exportResultMsg:
+		if msg.Err != nil {
+			m.editor.SetError(fmt.Sprintf("Export failed: %s", msg.Err))
+			return m, nil
+		}
+		rowCount := len(m.dataView.Rows())
+		m.editor.SetResult(fmt.Sprintf("Exported %d rows to %s", rowCount, filepath.Base(msg.Path)))
+
+	case dataview.CopyToClipboardMsg:
+		return m, m.copyToClipboardCmd(msg.Text)
+
+	case clipboardResultMsg:
+		if msg.Err != nil {
+			m.editor.SetError(fmt.Sprintf("Copy failed: %s", msg.Err))
+		} else {
+			m.editor.SetResult("Copied to clipboard")
+		}
+		return m, nil
 	}
 
 	// Route to focused component
@@ -309,6 +419,11 @@ func (m Model) View() string {
 	// Help overlay
 	if m.showHelp {
 		return m.renderHelp()
+	}
+
+	// Database switcher overlay
+	if m.showDBSwitcher {
+		return m.renderDBSwitcher()
 	}
 
 	// Title bar
@@ -391,8 +506,11 @@ func (m *Model) cycleFocus(dir int) {
 
 func (m Model) fetchTableListCmd() tea.Cmd {
 	db := m.db
+	timeout := m.queryTimeout
 	return func() tea.Msg {
-		tables, err := db.ListTables(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		tables, err := db.ListTables(ctx)
 		return TableListMsg{Tables: tables, Err: err}
 	}
 }
@@ -400,8 +518,11 @@ func (m Model) fetchTableListCmd() tea.Cmd {
 func (m Model) fetchTableDataCmd(table string) tea.Cmd {
 	db := m.db
 	pageSize := m.dataView.PageSize()
+	timeout := m.queryTimeout
 	return func() tea.Msg {
-		result, err := db.FetchTableData(context.Background(), table, pageSize, 0)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		result, err := db.FetchTableData(ctx, table, pageSize, 0)
 		if err != nil {
 			return QueryResultMsg{Err: err}
 		}
@@ -452,8 +573,11 @@ type tableCountMsg struct {
 
 func (m Model) fetchPageCmd(table string, page, offset, limit int) tea.Cmd {
 	db := m.db
+	timeout := m.queryTimeout
 	return func() tea.Msg {
-		result, err := db.FetchTableData(context.Background(), table, limit, offset)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		result, err := db.FetchTableData(ctx, table, limit, offset)
 		if err != nil {
 			return pageDataMsg{table: table, page: page, err: err}
 		}
@@ -468,8 +592,11 @@ func (m Model) fetchPageCmd(table string, page, offset, limit int) tea.Cmd {
 
 func (m Model) fetchCountCmd(table string) tea.Cmd {
 	db := m.db
+	timeout := m.queryTimeout
 	return func() tea.Msg {
-		count, err := db.CountRows(context.Background(), table)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		count, err := db.CountRows(ctx, table)
 		if err != nil {
 			return tableCountMsg{count: 0}
 		}
@@ -487,9 +614,54 @@ func (m Model) reconnectCmd() tea.Cmd {
 
 func (m Model) fetchSchemaCmd(table string) tea.Cmd {
 	db := m.db
+	timeout := m.queryTimeout
 	return func() tea.Msg {
-		info, err := db.DescribeTable(context.Background(), table)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		info, err := db.DescribeTable(ctx, table)
 		return SchemaInfoMsg{Info: info, Err: err}
+	}
+}
+
+func (m Model) fetchDatabaseListCmd() tea.Cmd {
+	db := m.db
+	timeout := m.queryTimeout
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		databases, err := db.ListDatabases(ctx)
+		return databaseListMsg{Databases: databases, Err: err}
+	}
+}
+
+func (m Model) switchDatabaseCmd(name string) tea.Cmd {
+	db := m.db
+	timeout := m.queryTimeout
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		err := db.SwitchDatabase(ctx, name)
+		return switchDatabaseResultMsg{Name: name, Err: err}
+	}
+}
+
+func (m Model) exportCmd(columns []string, rows [][]string, format string) tea.Cmd {
+	return func() tea.Msg {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return exportResultMsg{Err: err}
+		}
+		timestamp := time.Now().Format("20060102_150405")
+		filename := fmt.Sprintf("dbtui_export_%s.%s", timestamp, format)
+		path := filepath.Join(cwd, filename)
+
+		switch format {
+		case "json":
+			err = exportJSON(columns, rows, path)
+		default:
+			err = exportCSV(columns, rows, path)
+		}
+		return exportResultMsg{Path: path, Err: err}
 	}
 }
 
@@ -510,13 +682,19 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  Ctrl+Right  ") + desc.Render("Grow sidebar") + "\n"
 	help += keyStyle.Render("  Ctrl+T      ") + desc.Render("Toggle dark/light theme") + "\n"
 	help += keyStyle.Render("  Ctrl+R      ") + desc.Render("Refresh tables & data") + "\n"
+	help += keyStyle.Render("  Ctrl+S      ") + desc.Render("Export data as CSV") + "\n"
+	help += keyStyle.Render("  Ctrl+J      ") + desc.Render("Export data as JSON") + "\n"
+	help += keyStyle.Render("  Ctrl+X      ") + desc.Render("Explain current query") + "\n"
+	help += keyStyle.Render("  Ctrl+D      ") + desc.Render("Switch database") + "\n"
 	help += keyStyle.Render("  F1          ") + desc.Render("Toggle this help") + "\n\n"
 
 	help += title.Render("Sidebar") + "\n"
 	help += keyStyle.Render("  j/k arrows  ") + desc.Render("Navigate tables") + "\n"
 	help += keyStyle.Render("  Enter       ") + desc.Render("Select table, load data") + "\n"
 	help += keyStyle.Render("  i           ") + desc.Render("Toggle schema info") + "\n"
-	help += keyStyle.Render("  g/G         ") + desc.Render("First/last table") + "\n\n"
+	help += keyStyle.Render("  g/G         ") + desc.Render("First/last table") + "\n"
+	help += keyStyle.Render("  /           ") + desc.Render("Filter tables") + "\n"
+	help += keyStyle.Render("  Escape      ") + desc.Render("Clear filter") + "\n\n"
 
 	help += title.Render("Data View") + "\n"
 	help += keyStyle.Render("  arrows/hjkl ") + desc.Render("Scroll grid") + "\n"
@@ -524,7 +702,10 @@ func (m Model) renderHelp() string {
 	help += keyStyle.Render("  Escape      ") + desc.Render("Clear filter") + "\n"
 	help += keyStyle.Render("  PgUp/PgDn   ") + desc.Render("Scroll viewport up/down") + "\n"
 	help += keyStyle.Render("  n/p         ") + desc.Render("Next/prev server page") + "\n"
-	help += keyStyle.Render("  Home/End    ") + desc.Render("First/last row") + "\n\n"
+	help += keyStyle.Render("  Home/End    ") + desc.Render("First/last row") + "\n"
+	help += keyStyle.Render("  c           ") + desc.Render("Copy cell to clipboard") + "\n"
+	help += keyStyle.Render("  y           ") + desc.Render("Copy row to clipboard") + "\n"
+	help += keyStyle.Render("  d           ") + desc.Render("Toggle row detail view") + "\n\n"
 
 	help += title.Render("Query Editor") + "\n"
 	help += keyStyle.Render("  Enter       ") + desc.Render("Execute (requires ;) or newline") + "\n"
@@ -555,16 +736,97 @@ func (m Model) renderHelp() string {
 		vPad = 0
 	}
 
-	var padded string
-	for i := 0; i < vPad; i++ {
-		padded += "\n"
-	}
+	padded := strings.Repeat("\n", vPad)
+	hPadding := strings.Repeat(" ", hPad)
 	lines := strings.Split(rendered, "\n")
 	for _, line := range lines {
-		for i := 0; i < hPad; i++ {
-			padded += " "
+		padded += hPadding + line + "\n"
+	}
+
+	return padded
+}
+
+func (m Model) renderDBSwitcher() string {
+	t := m.theme
+	title := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
+	itemStyle := lipgloss.NewStyle().Foreground(t.Text)
+	cursorStyle := lipgloss.NewStyle().Foreground(t.Highlight).Bold(true)
+	currentStyle := lipgloss.NewStyle().Foreground(t.SuccessColor)
+	dim := lipgloss.NewStyle().Foreground(t.Subtle)
+
+	content := title.Render("Switch Database") + "\n\n"
+
+	if len(m.databases) == 0 {
+		content += dim.Render("Loading...")
+	} else {
+		currentDB := m.db.DatabaseName()
+		// Calculate visible window for scrolling
+		maxVisible := m.height - 10
+		if maxVisible < 5 {
+			maxVisible = 5
 		}
-		padded += line + "\n"
+		start := 0
+		if m.dbCursor >= maxVisible {
+			start = m.dbCursor - maxVisible + 1
+		}
+		end := start + maxVisible
+		if end > len(m.databases) {
+			end = len(m.databases)
+		}
+
+		for i := start; i < end; i++ {
+			db := m.databases[i]
+			prefix := "  "
+			if i == m.dbCursor {
+				prefix = "> "
+			}
+
+			line := prefix + db
+			if db == currentDB {
+				line += " (current)"
+			}
+
+			if i == m.dbCursor {
+				content += cursorStyle.Render(line)
+			} else if db == currentDB {
+				content += currentStyle.Render(line)
+			} else {
+				content += itemStyle.Render(line)
+			}
+			if i < end-1 {
+				content += "\n"
+			}
+		}
+
+		if end < len(m.databases) {
+			content += "\n" + dim.Render(fmt.Sprintf("  ... %d more", len(m.databases)-end))
+		}
+	}
+
+	content += "\n\n" + dim.Render("j/k: navigate  Enter: select  Esc: close")
+
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(t.Highlight).
+		Padding(1, 2).
+		Width(40)
+
+	// Center in terminal
+	rendered := box.Render(content)
+	hPad := (m.width - lipgloss.Width(rendered)) / 2
+	vPad := (m.height - lipgloss.Height(rendered)) / 2
+	if hPad < 0 {
+		hPad = 0
+	}
+	if vPad < 0 {
+		vPad = 0
+	}
+
+	padded := strings.Repeat("\n", vPad)
+	hPadding := strings.Repeat(" ", hPad)
+	lines := strings.Split(rendered, "\n")
+	for _, line := range lines {
+		padded += hPadding + line + "\n"
 	}
 
 	return padded
@@ -595,6 +857,9 @@ func (m *Model) applyTheme() {
 		ErrorColor:   t.ErrorColor,
 		SuccessColor: t.SuccessColor,
 		WarningColor: t.WarningColor,
+		KeywordColor: t.KeywordColor,
+		StringColor:  t.StringColor,
+		NumberColor:  t.NumberColor,
 	})
 	m.titleBar.SetColors(titlebar.Colors{
 		Highlight:  t.Highlight,
@@ -607,18 +872,4 @@ func (m *Model) applyTheme() {
 		Background: t.HeaderBg,
 	})
 	m.styles.Error = lipgloss.NewStyle().Foreground(t.ErrorColor).Bold(true)
-}
-
-func min64(a, b float64) float64 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max64(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
 }

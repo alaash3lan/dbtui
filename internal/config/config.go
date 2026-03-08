@@ -8,11 +8,25 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// ConnectionProfile holds a named connection bookmark.
+type ConnectionProfile struct {
+	Name     string `toml:"name"`
+	Host     string `toml:"host"`
+	Port     int    `toml:"port"`
+	User     string `toml:"user"`
+	Password string `toml:"password"`
+	Database string `toml:"database"`
+	TLS      string `toml:"tls"`      // "true", "skip-verify", or path to CA cert
+	TLSCert  string `toml:"tls_cert"` // Path to client certificate (optional)
+	TLSKey   string `toml:"tls_key"`  // Path to client key (optional)
+}
+
 // Config holds all dbtui configuration.
 type Config struct {
-	Display DisplayConfig `toml:"display"`
-	History HistoryConfig `toml:"history"`
-	Query   QueryConfig   `toml:"query"`
+	Display     DisplayConfig       `toml:"display"`
+	History     HistoryConfig       `toml:"history"`
+	Query       QueryConfig         `toml:"query"`
+	Connections []ConnectionProfile `toml:"connections"`
 }
 
 // QueryConfig holds query execution settings.
@@ -92,6 +106,25 @@ func findConfigFile() string {
 	}
 
 	return ""
+}
+
+// FindConnection returns the ConnectionProfile with the given name, or nil if not found.
+func (c *Config) FindConnection(name string) *ConnectionProfile {
+	for i := range c.Connections {
+		if c.Connections[i].Name == name {
+			return &c.Connections[i]
+		}
+	}
+	return nil
+}
+
+// ConnectionNames returns the names of all configured connection profiles.
+func (c *Config) ConnectionNames() []string {
+	names := make([]string, len(c.Connections))
+	for i, conn := range c.Connections {
+		names[i] = conn.Name
+	}
+	return names
 }
 
 func defaultHistoryPath() string {

@@ -10,6 +10,9 @@ type ConnectionConfig struct {
 	Password string
 	Database string
 	DSN      string // If provided, overrides individual fields
+	TLS      string // "", "true", "skip-verify", or path to CA cert file
+	TLSCert  string // Path to client certificate (optional, used with CA cert)
+	TLSKey   string // Path to client key (optional, used with CA cert)
 }
 
 // TableInfo represents basic metadata about a database table.

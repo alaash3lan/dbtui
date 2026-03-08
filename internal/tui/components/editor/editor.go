@@ -59,6 +59,11 @@ type Colors struct {
 	ErrorColor   lipgloss.Color
 	SuccessColor lipgloss.Color
 	WarningColor lipgloss.Color
+
+	// SQL syntax highlighting
+	KeywordColor lipgloss.Color
+	StringColor  lipgloss.Color
+	NumberColor  lipgloss.Color
 }
 
 // Model represents the query editor state.
@@ -163,6 +168,11 @@ func (m *Model) SetResult(msg string) {
 // SetColors updates the theme colors.
 func (m *Model) SetColors(c Colors) {
 	m.colors = c
+}
+
+// Value returns the current textarea content.
+func (m Model) Value() string {
+	return m.textarea.Value()
 }
 
 // ClearStatus clears error and result messages.
@@ -299,8 +309,18 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n")
 
-	// Textarea
-	b.WriteString(m.textarea.View())
+	// Textarea: show highlighted SQL when unfocused, plain textarea when focused
+	if m.focused {
+		b.WriteString(m.textarea.View())
+	} else {
+		val := m.textarea.Value()
+		if val == "" {
+			b.WriteString(m.textarea.View())
+		} else {
+			highlighted := highlightSQL(val, c.KeywordColor, c.StringColor, c.NumberColor)
+			b.WriteString(highlighted)
+		}
+	}
 
 	// Status line (error or result)
 	if m.lastError != "" {

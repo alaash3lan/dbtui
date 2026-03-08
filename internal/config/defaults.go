@@ -1,6 +1,6 @@
 package config
 
-// Default values for dbplus configuration.
+// Default values for dbtui configuration.
 const (
 	DefaultHost         = "127.0.0.1"
 	DefaultPort         = 3306

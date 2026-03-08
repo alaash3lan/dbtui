@@ -48,7 +48,7 @@ func (m Model) View() string {
 	countStyle := lipgloss.NewStyle().Foreground(c.Text)
 	barStyle := lipgloss.NewStyle().Background(c.Background).Width(m.width)
 
-	left := titleStyle.Render(fmt.Sprintf(" dbplus v%s", m.version))
+	left := titleStyle.Render(fmt.Sprintf(" dbtui v%s", m.version))
 	right := ""
 	if m.rowCount > 0 {
 		right = countStyle.Render(fmt.Sprintf("%d ", m.rowCount))

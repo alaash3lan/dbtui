@@ -20,6 +20,11 @@ type PageRequestMsg struct {
 	Limit  int
 }
 
+// CopyToClipboardMsg is emitted when the user copies a cell or row value.
+type CopyToClipboardMsg struct {
+	Text string
+}
+
 // KeyMap defines dataview-specific keybindings.
 type KeyMap struct {
 	Up          key.Binding
@@ -34,6 +39,9 @@ type KeyMap struct {
 	ClearFilter key.Binding
 	NextPage    key.Binding
 	PrevPage    key.Binding
+	CopyCell    key.Binding
+	CopyRow     key.Binding
+	Detail      key.Binding
 }
 
 // DefaultKeyMap returns dataview key bindings.
@@ -87,6 +95,18 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "prev page"),
 		),
+		CopyCell: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "copy cell"),
+		),
+		CopyRow: key.NewBinding(
+			key.WithKeys("y"),
+			key.WithHelp("y", "copy row"),
+		),
+		Detail: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "row detail"),
+		),
 	}
 }
 
@@ -117,6 +137,10 @@ type Model struct {
 	filterInput  textinput.Model
 	filterActive bool // true when typing in filter
 	filterText   string
+
+	// Row detail mode
+	detailMode   bool
+	detailScroll int
 
 	tableName  string
 	page       int
@@ -192,6 +216,36 @@ func (m *Model) SetPageDirect(page int) {
 	m.page = page
 }
 
+// Columns returns the current column names.
+func (m Model) Columns() []string {
+	return m.columns
+}
+
+// Rows returns the currently displayed rows (after filtering).
+func (m Model) Rows() [][]string {
+	return m.rows
+}
+
+// CursorCellValue returns the value of the cell under the cursor.
+func (m Model) CursorCellValue() string {
+	if m.cursorRow < 0 || m.cursorRow >= len(m.rows) {
+		return ""
+	}
+	row := m.rows[m.cursorRow]
+	if m.cursorCol < 0 || m.cursorCol >= len(row) {
+		return ""
+	}
+	return row[m.cursorCol]
+}
+
+// CursorRowValues returns all cell values of the current row as tab-separated text.
+func (m Model) CursorRowValues() string {
+	if m.cursorRow < 0 || m.cursorRow >= len(m.rows) {
+		return ""
+	}
+	return strings.Join(m.rows[m.cursorRow], "\t")
+}
+
 // PageSize returns the configured page size.
 func (m Model) PageSize() int {
 	return m.pageSize
@@ -256,6 +310,33 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				m.applyFilter()
 				return m, cmd
 			}
+		}
+
+		// Detail mode navigation
+		if m.detailMode {
+			switch {
+			case key.Matches(msg, m.keyMap.Detail), key.Matches(msg, m.keyMap.ClearFilter):
+				m.detailMode = false
+				m.detailScroll = 0
+				return m, nil
+			case key.Matches(msg, m.keyMap.Up):
+				if m.detailScroll > 0 {
+					m.detailScroll--
+				}
+				return m, nil
+			case key.Matches(msg, m.keyMap.Down):
+				if m.detailScroll < len(m.columns)-1 {
+					m.detailScroll++
+				}
+				return m, nil
+			case key.Matches(msg, m.keyMap.Home):
+				m.detailScroll = 0
+				return m, nil
+			case key.Matches(msg, m.keyMap.End):
+				m.detailScroll = len(m.columns) - 1
+				return m, nil
+			}
+			return m, nil
 		}
 
 		// Grid navigation mode
@@ -362,6 +443,25 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					}
 				}
 			}
+		case key.Matches(msg, m.keyMap.CopyCell):
+			text := m.CursorCellValue()
+			if text != "" {
+				return m, func() tea.Msg {
+					return CopyToClipboardMsg{Text: text}
+				}
+			}
+		case key.Matches(msg, m.keyMap.CopyRow):
+			text := m.CursorRowValues()
+			if text != "" {
+				return m, func() tea.Msg {
+					return CopyToClipboardMsg{Text: text}
+				}
+			}
+		case key.Matches(msg, m.keyMap.Detail):
+			if len(m.rows) > 0 {
+				m.detailMode = true
+				m.detailScroll = 0
+			}
 		}
 	}
 
@@ -444,6 +544,11 @@ func (m Model) View() string {
 		return m.applyBorder(b.String(), contentWidth, border, focusBorder)
 	}
 
+	// Row detail mode
+	if m.detailMode {
+		return m.renderDetailView(contentWidth, border, focusBorder)
+	}
+
 	// Calculate visible columns
 	visibleCols := m.visibleColumns(contentWidth)
 
@@ -502,6 +607,97 @@ func (m Model) View() string {
 		padLen = 0
 	}
 	b.WriteString(footerStyle.Render(strings.Repeat(" ", padLen) + pageInfo))
+
+	return m.applyBorder(b.String(), contentWidth, border, focusBorder)
+}
+
+func (m Model) renderDetailView(contentWidth int, border, focusBorder lipgloss.Color) string {
+	c := m.colors
+	highlight := c.Highlight
+	subtle := c.Subtle
+
+	var b strings.Builder
+
+	// Header with row index
+	headerStyle := lipgloss.NewStyle().Foreground(highlight).Bold(true)
+	b.WriteString(headerStyle.Render(fmt.Sprintf(" Row Detail (%d/%d)", m.cursorRow+1, len(m.rows))))
+	b.WriteString("\n")
+
+	// Separator
+	b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(strings.Repeat("─", contentWidth)))
+	b.WriteString("\n")
+
+	// Calculate max column name width for alignment
+	maxColWidth := 0
+	for _, col := range m.columns {
+		w := stringutil.RuneWidth(col)
+		if w > maxColWidth {
+			maxColWidth = w
+		}
+	}
+	// Cap label width to leave room for values
+	if maxColWidth > contentWidth/3 {
+		maxColWidth = contentWidth / 3
+	}
+
+	row := m.rows[m.cursorRow]
+	colStyle := lipgloss.NewStyle().Foreground(highlight).Bold(true)
+	dimStyle := lipgloss.NewStyle().Foreground(subtle).Italic(true)
+
+	// Available lines for detail rows: height - header(1) - separator(1) - footer(1) - border(2)
+	visibleLines := m.height - 5
+	if visibleLines < 1 {
+		visibleLines = 1
+	}
+
+	// Clamp scroll
+	if m.detailScroll > len(m.columns)-visibleLines {
+		maxScroll := len(m.columns) - visibleLines
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.detailScroll = maxScroll
+	}
+
+	endIdx := m.detailScroll + visibleLines
+	if endIdx > len(m.columns) {
+		endIdx = len(m.columns)
+	}
+
+	for i := m.detailScroll; i < endIdx; i++ {
+		colName := stringutil.Truncate(m.columns[i], maxColWidth)
+		padding := strings.Repeat(" ", maxColWidth-stringutil.RuneWidth(colName))
+
+		val := ""
+		if i < len(row) {
+			val = row[i]
+		}
+
+		// Truncate value to fit remaining width
+		valMaxWidth := contentWidth - maxColWidth - 4 // " : " separator + leading space
+		if valMaxWidth < 1 {
+			valMaxWidth = 1
+		}
+		val = stringutil.Truncate(val, valMaxWidth)
+
+		label := colStyle.Render(" " + colName + padding)
+		separator := lipgloss.NewStyle().Foreground(subtle).Render(" : ")
+
+		if val == "<NULL>" {
+			b.WriteString(label + separator + dimStyle.Render(val))
+		} else {
+			b.WriteString(label + separator + val)
+		}
+		if i < endIdx-1 {
+			b.WriteString("\n")
+		}
+	}
+
+	// Footer
+	b.WriteString("\n")
+	footerStyle := lipgloss.NewStyle().Foreground(subtle)
+	hint := fmt.Sprintf(" %d columns  (d/Esc to close)", len(m.columns))
+	b.WriteString(footerStyle.Render(hint))
 
 	return m.applyBorder(b.String(), contentWidth, border, focusBorder)
 }

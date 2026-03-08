@@ -34,7 +34,9 @@ func (db *DB) Execute(ctx context.Context, query string) (*QueryResult, error) {
 
 	// Detect USE database
 	if strings.HasPrefix(trimmed, "USE ") {
-		dbName := strings.TrimSpace(query[4:])
+		// Extract db name from the trimmed query to handle leading whitespace
+		trimmedQuery := strings.TrimSpace(query)
+		dbName := trimmedQuery[4:]
 		dbName = strings.TrimRight(dbName, ";")
 		dbName = strings.TrimSpace(dbName)
 		dbName = strings.Trim(dbName, "`")

@@ -12,11 +12,6 @@ type TableListMsg struct {
 	Err    error
 }
 
-// TableSelectedMsg is sent when the user selects a table in the sidebar.
-type TableSelectedMsg struct {
-	TableName string
-}
-
 // QueryResultMsg is sent when a query finishes executing.
 type QueryResultMsg struct {
 	Columns         []string
@@ -35,9 +30,32 @@ type SchemaInfoMsg struct {
 	Err  error
 }
 
-// ConnectionErrorMsg signals a connection problem.
-type ConnectionErrorMsg struct {
+// exportRequestMsg is sent when the user triggers an export.
+type exportRequestMsg struct {
+	Format string // "csv" or "json"
+}
+
+// exportResultMsg carries the result of an export operation.
+type exportResultMsg struct {
+	Path string
+	Err  error
+}
+
+// clipboardResultMsg carries the result of a clipboard operation.
+type clipboardResultMsg struct {
 	Err error
+}
+
+// databaseListMsg is sent when the database list has been fetched.
+type databaseListMsg struct {
+	Databases []string
+	Err       error
+}
+
+// switchDatabaseResultMsg carries the result of a database switch.
+type switchDatabaseResultMsg struct {
+	Name string
+	Err  error
 }
 
 // reconnectMsg triggers a reconnect attempt.
@@ -48,8 +66,3 @@ type reconnectResultMsg struct {
 	Err error
 }
 
-// FilterChangedMsg is sent when the data filter changes.
-type FilterChangedMsg struct {
-	Column string
-	Value  string
-}

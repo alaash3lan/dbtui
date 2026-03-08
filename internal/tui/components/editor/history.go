@@ -102,7 +102,7 @@ func (h *HistoryRing) LoadFromFile(path string) error {
 		if line == "" {
 			continue
 		}
-		query := strings.ReplaceAll(line, `\n`, "\n")
+		query := unescapeLine(line)
 		h.Push(query)
 	}
 	return nil
@@ -111,15 +111,40 @@ func (h *HistoryRing) LoadFromFile(path string) error {
 // SaveToFile writes history entries to a file, creating parent
 // directories if needed. Newlines within queries are escaped as \n.
 func (h *HistoryRing) SaveToFile(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
 	var b strings.Builder
 	for _, entry := range h.entries {
-		line := strings.ReplaceAll(entry, "\n", `\n`)
+		line := strings.ReplaceAll(entry, `\`, `\\`)
+		line = strings.ReplaceAll(line, "\n", `\n`)
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o644)
+	return os.WriteFile(path, []byte(b.String()), 0o600)
+}
+
+// unescapeLine reverses the escaping applied by SaveToFile.
+// It handles \n → newline and \\ → backslash without double-processing.
+func unescapeLine(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case 'n':
+				b.WriteByte('\n')
+				i++
+			case '\\':
+				b.WriteByte('\\')
+				i++
+			default:
+				b.WriteByte(s[i])
+			}
+		} else {
+			b.WriteByte(s[i])
+		}
+	}
+	return b.String()
 }

@@ -25,6 +25,11 @@ type Theme struct {
 	ErrorColor   lipgloss.Color
 	SuccessColor lipgloss.Color
 	WarningColor lipgloss.Color
+
+	// SQL syntax highlighting
+	KeywordColor lipgloss.Color
+	StringColor  lipgloss.Color
+	NumberColor  lipgloss.Color
 }
 
 // DarkTheme returns the dark color scheme.
@@ -43,6 +48,9 @@ func DarkTheme() Theme {
 		ErrorColor:   lipgloss.Color("#F38BA8"),
 		SuccessColor: lipgloss.Color("#A6E3A1"),
 		WarningColor: lipgloss.Color("#F9E2AF"),
+		KeywordColor: lipgloss.Color("#CBA6F7"),
+		StringColor:  lipgloss.Color("#A6E3A1"),
+		NumberColor:  lipgloss.Color("#FAB387"),
 	}
 }
 
@@ -62,5 +70,8 @@ func LightTheme() Theme {
 		ErrorColor:   lipgloss.Color("#D20F39"),
 		SuccessColor: lipgloss.Color("#40A02B"),
 		WarningColor: lipgloss.Color("#DF8E1D"),
+		KeywordColor: lipgloss.Color("#8839EF"),
+		StringColor:  lipgloss.Color("#40A02B"),
+		NumberColor:  lipgloss.Color("#FE640B"),
 	}
 }
