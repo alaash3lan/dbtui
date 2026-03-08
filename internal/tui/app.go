@@ -10,12 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alaa/dbplus/internal/database"
-	"github.com/alaa/dbplus/internal/tui/components/dataview"
-	"github.com/alaa/dbplus/internal/tui/components/editor"
-	"github.com/alaa/dbplus/internal/tui/components/sidebar"
-	"github.com/alaa/dbplus/internal/tui/components/statusbar"
-	"github.com/alaa/dbplus/internal/tui/components/titlebar"
+	"github.com/alaa/dbtui/internal/database"
+	"github.com/alaa/dbtui/internal/tui/components/dataview"
+	"github.com/alaa/dbtui/internal/tui/components/editor"
+	"github.com/alaa/dbtui/internal/tui/components/sidebar"
+	"github.com/alaa/dbtui/internal/tui/components/statusbar"
+	"github.com/alaa/dbtui/internal/tui/components/titlebar"
 )
 
 // FocusedPane tracks which pane has keyboard focus.

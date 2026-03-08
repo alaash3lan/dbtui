@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/alaa/dbplus/internal/database"
+	"github.com/alaa/dbtui/internal/database"
 )
 
 const version = "0.1.0"
@@ -30,10 +30,10 @@ func ParseFlags() (database.ConnectionConfig, error) {
 	flag.BoolVar(&showVer, "version", false, "Show version")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "dbplus v%s - Modern MySQL/MariaDB CLI\n\n", version)
+		fmt.Fprintf(os.Stderr, "dbtui v%s - Modern MySQL/MariaDB CLI\n\n", version)
 		fmt.Fprintf(os.Stderr, "Usage:\n")
-		fmt.Fprintf(os.Stderr, "  dbplus [flags] [database]\n")
-		fmt.Fprintf(os.Stderr, "  dbplus --dsn \"user:pass@tcp(host:port)/dbname\"\n\n")
+		fmt.Fprintf(os.Stderr, "  dbtui [flags] [database]\n")
+		fmt.Fprintf(os.Stderr, "  dbtui --dsn \"user:pass@tcp(host:port)/dbname\"\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		flag.PrintDefaults()
 	}
@@ -41,7 +41,7 @@ func ParseFlags() (database.ConnectionConfig, error) {
 	flag.Parse()
 
 	if showVer {
-		fmt.Printf("dbplus v%s\n", version)
+		fmt.Printf("dbtui v%s\n", version)
 		os.Exit(0)
 	}
 

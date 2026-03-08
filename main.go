@@ -7,10 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alaa/dbplus/cmd"
-	"github.com/alaa/dbplus/internal/config"
-	"github.com/alaa/dbplus/internal/database"
-	"github.com/alaa/dbplus/internal/tui"
+	"github.com/alaa/dbtui/cmd"
+	"github.com/alaa/dbtui/internal/config"
+	"github.com/alaa/dbtui/internal/database"
+	"github.com/alaa/dbtui/internal/tui"
 )
 
 func main() {

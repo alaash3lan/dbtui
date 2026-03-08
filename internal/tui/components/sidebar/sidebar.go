@@ -8,8 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alaa/dbplus/internal/database"
-	"github.com/alaa/dbplus/internal/stringutil"
+	"github.com/alaa/dbtui/internal/database"
+	"github.com/alaa/dbtui/internal/stringutil"
 )
 
 // TableSelectedMsg is emitted when a table is selected.

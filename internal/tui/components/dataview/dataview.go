@@ -9,7 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alaa/dbplus/internal/stringutil"
+	"github.com/alaa/dbtui/internal/stringutil"
 )
 
 // PageRequestMsg is emitted when the user navigates past the loaded page.

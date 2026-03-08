@@ -1,4 +1,4 @@
-module github.com/alaa/dbplus
+module github.com/alaa/dbtui
 
 go 1.25.7
 

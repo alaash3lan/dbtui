@@ -3,7 +3,7 @@ package tui
 import (
 	"time"
 
-	"github.com/alaa/dbplus/internal/database"
+	"github.com/alaa/dbtui/internal/database"
 )
 
 // TableListMsg is sent when the table list has been fetched.

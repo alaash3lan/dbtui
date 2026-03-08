@@ -1,4 +1,4 @@
-# dbplus
+# dbtui
 
 A modern terminal-based MySQL/MariaDB client built with Go and [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
@@ -21,30 +21,28 @@ A modern terminal-based MySQL/MariaDB client built with Go and [Bubble Tea](http
 ## Installation
 
 ```bash
-go install github.com/alaa/dbplus@latest
+go install github.com/alaa/dbtui@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/alaa/dbplus.git
-cd dbplus
-go build -o dbplus .
+git clone https://github.com/alaa/dbtui.git
+cd dbtui
+go build -o dbtui .
 ```
 
 ## Usage
 
 ```bash
 # Connect with flags
-
-
- -u root -p secret mydb
+dbtui -u root -p secret mydb
 
 # Connect with DSN
-dbplus --dsn "root:secret@tcp(127.0.0.1:3306)/mydb"
+dbtui --dsn "root:secret@tcp(127.0.0.1:3306)/mydb"
 
 # Show version
-dbplus --version
+dbtui --version
 ```
 
 ### Flags
@@ -104,11 +102,11 @@ dbplus --version
 
 ## Configuration
 
-dbplus looks for a TOML config file in:
+dbtui looks for a TOML config file in:
 
-1. `$XDG_CONFIG_HOME/dbplus/config.toml`
-2. `~/.config/dbplus/config.toml`
-3. `~/.dbplus.toml`
+1. `$XDG_CONFIG_HOME/dbtui/config.toml`
+2. `~/.config/dbtui/config.toml`
+3. `~/.dbtui.toml`
 
 ### Example config
 
@@ -136,7 +134,7 @@ save_to_file = true
 ## Project Structure
 
 ```
-dbplus/
+dbtui/
 ├── main.go                         # Entry point
 ├── cmd/root.go                     # CLI flag parsing
 └── internal/
@@ -160,10 +158,10 @@ dbplus/
 ## Running Tests
 
 ```bash
-# Set test database credentials (defaults to root:root@127.0.0.1:3306/dbplus_test)
-export DBPLUS_TEST_USER=root
-export DBPLUS_TEST_PASS=root
-export DBPLUS_TEST_DB=dbplus_test
+# Set test database credentials (defaults to root:root@127.0.0.1:3306/dbtui_test)
+export DBTUI_TEST_USER=root
+export DBTUI_TEST_PASS=root
+export DBTUI_TEST_DB=dbtui_test
 
 go test ./... -v
 ```
