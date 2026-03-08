@@ -31,6 +31,19 @@ type PageRequestMsg struct {
 	Limit  int
 }
 
+// SearchRequestMsg is emitted when the user submits a server-side search.
+type SearchRequestMsg struct {
+	Table    string
+	Column   string // empty means all columns
+	Operator string // "LIKE" or "="
+	Value    string // the search parameter (already formatted for LIKE, e.g. "%foo%")
+}
+
+// SearchClearMsg is emitted when the user clears the server-side search.
+type SearchClearMsg struct {
+	Table string
+}
+
 // CopyToClipboardMsg is emitted when the user copies a cell or row value.
 type CopyToClipboardMsg struct {
 	Text string
@@ -47,6 +60,7 @@ type KeyMap struct {
 	Home        key.Binding
 	End         key.Binding
 	Filter      key.Binding
+	Search      key.Binding
 	ClearFilter key.Binding
 	NextPage    key.Binding
 	PrevPage    key.Binding
@@ -94,8 +108,12 @@ func DefaultKeyMap() KeyMap {
 			key.WithHelp("end", "last row"),
 		),
 		Filter: key.NewBinding(
-			key.WithKeys("/", "ctrl+f"),
-			key.WithHelp("/ ctrl+f", "filter"),
+			key.WithKeys("/"),
+			key.WithHelp("/", "filter"),
+		),
+		Search: key.NewBinding(
+			key.WithKeys("ctrl+f"),
+			key.WithHelp("ctrl+f", "search"),
 		),
 		ClearFilter: key.NewBinding(
 			key.WithKeys("escape"),
@@ -159,10 +177,15 @@ type Model struct {
 	scrollRow int
 	scrollCol int
 
-	// Filter
+	// Filter (client-side)
 	filterInput  textinput.Model
 	filterActive bool // true when typing in filter
 	filterText   string
+
+	// Search (server-side)
+	searchForm     searchFormState
+	isSearchResult bool   // true when displaying search results
+	searchDisplay  string // display text for current search
 
 	// Sorting
 	sortCol int // -1 = no sort
@@ -203,9 +226,20 @@ func New(pageSize int) Model {
 		pageSize:       pageSize,
 		keyMap:         DefaultKeyMap(),
 		filterInput:    fi,
+		searchForm:     newSearchForm(),
 		sortCol:        -1,
 		showRowNumbers: true,
 	}
+}
+
+// SetSearchResult marks the current data as a search result.
+func (m *Model) SetSearchResult(isSearch bool) {
+	m.isSearchResult = isSearch
+}
+
+// IsSearchResult returns whether the current data is from a server-side search.
+func (m Model) IsSearchResult() bool {
+	return m.isSearchResult
 }
 
 // SetData loads new query results into the grid and resets page to 0.
@@ -230,6 +264,7 @@ func (m *Model) SetFocused(focused bool) {
 	if !focused {
 		m.filterActive = false
 		m.filterInput.Blur()
+		m.searchForm.close()
 	}
 }
 
@@ -238,6 +273,7 @@ func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
 	m.filterInput.Width = width - 14 // account for prompt + border
+	m.searchForm.valueInput.Width = width - 14
 }
 
 // SetColors updates the theme colors.
@@ -326,6 +362,87 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		// When search form is active, route keys there
+		if m.searchForm.active {
+			switch {
+			case key.Matches(msg, m.keyMap.ClearFilter):
+				m.searchForm.close()
+				return m, nil
+
+			case msg.Type == tea.KeyEnter:
+				val := strings.TrimSpace(m.searchForm.valueInput.Value())
+				if val == "" || m.tableName == "" {
+					return m, nil
+				}
+				m.searchDisplay = m.searchForm.displayText()
+				column, operator, param := m.searchForm.buildQuery()
+				tableName := m.tableName
+				m.searchForm.close()
+				return m, func() tea.Msg {
+					return SearchRequestMsg{
+						Table:    tableName,
+						Column:   column,
+						Operator: operator,
+						Value:    param,
+					}
+				}
+
+			case msg.Type == tea.KeyTab, msg.Type == tea.KeyDown:
+				// Move to next field
+				m.searchForm.field = (m.searchForm.field + 1) % 3
+				if m.searchForm.field == fieldValue {
+					m.searchForm.valueInput.Focus()
+				} else {
+					m.searchForm.valueInput.Blur()
+				}
+				return m, nil
+
+			case msg.Type == tea.KeyShiftTab, msg.Type == tea.KeyUp:
+				// Move to previous field
+				m.searchForm.field = (m.searchForm.field + 2) % 3
+				if m.searchForm.field == fieldValue {
+					m.searchForm.valueInput.Focus()
+				} else {
+					m.searchForm.valueInput.Blur()
+				}
+				return m, nil
+
+			case msg.Type == tea.KeyLeft:
+				if m.searchForm.field == fieldColumn {
+					if m.searchForm.columnIdx > 0 {
+						m.searchForm.columnIdx--
+					} else {
+						m.searchForm.columnIdx = len(m.searchForm.columns) - 1
+					}
+					return m, nil
+				} else if m.searchForm.field == fieldOperator {
+					if m.searchForm.operatorIdx > 0 {
+						m.searchForm.operatorIdx--
+					} else {
+						m.searchForm.operatorIdx = len(searchOperators) - 1
+					}
+					return m, nil
+				}
+
+			case msg.Type == tea.KeyRight:
+				if m.searchForm.field == fieldColumn {
+					m.searchForm.columnIdx = (m.searchForm.columnIdx + 1) % len(m.searchForm.columns)
+					return m, nil
+				} else if m.searchForm.field == fieldOperator {
+					m.searchForm.operatorIdx = (m.searchForm.operatorIdx + 1) % len(searchOperators)
+					return m, nil
+				}
+			}
+
+			// If we're on the value field, pass keys to the text input
+			if m.searchForm.field == fieldValue {
+				var cmd tea.Cmd
+				m.searchForm.valueInput, cmd = m.searchForm.valueInput.Update(msg)
+				return m, cmd
+			}
+			return m, nil
+		}
+
 		// When filter input is active, route keys there
 		if m.filterActive {
 			switch {
@@ -385,11 +502,28 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		// Grid navigation mode
 		switch {
+		case key.Matches(msg, m.keyMap.Search):
+			if m.tableName != "" && len(m.columns) > 0 {
+				m.searchForm.open(m.columns)
+				// Default to the currently selected column
+				if m.cursorCol >= 0 && m.cursorCol < len(m.columns) {
+					m.searchForm.columnIdx = m.cursorCol
+				}
+				return m, nil
+			}
 		case key.Matches(msg, m.keyMap.Filter):
 			m.filterActive = true
 			return m, m.filterInput.Focus()
 		case key.Matches(msg, m.keyMap.ClearFilter):
-			// Escape in grid mode clears filter if active
+			// Escape: clear search results first, then filter
+			if m.isSearchResult {
+				m.isSearchResult = false
+				m.searchDisplay = ""
+				tableName := m.tableName
+				return m, func() tea.Msg {
+					return SearchClearMsg{Table: tableName}
+				}
+			}
 			if m.filterText != "" {
 				m.filterInput.SetValue("")
 				m.filterText = ""
@@ -666,9 +800,17 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n")
 
-	// Filter bar (always visible)
-	if m.filterActive {
+	// Search/Filter bar
+	if m.searchForm.active {
+		b.WriteString(m.searchForm.render(contentWidth, highlight, subtle, focusBorder, selectedBg))
+	} else if m.filterActive {
 		b.WriteString(m.filterInput.View())
+	} else if m.isSearchResult && m.searchDisplay != "" {
+		searchStyle := lipgloss.NewStyle().Foreground(highlight).Bold(true)
+		labelStyle := lipgloss.NewStyle().Foreground(subtle)
+		b.WriteString(searchStyle.Render(fmt.Sprintf(" Search: %s", m.searchDisplay)))
+		b.WriteString(labelStyle.Render(fmt.Sprintf("  %d results", len(m.allRows))))
+		b.WriteString(labelStyle.Render("  (Esc to clear)"))
 	} else if m.filterText != "" {
 		f := ParseFilter(m.filterText)
 		filterDisplay := ""
@@ -683,7 +825,7 @@ func (m Model) View() string {
 		matchInfo := fmt.Sprintf("  %d/%d", len(m.rows), len(m.allRows))
 		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(matchInfo))
 	} else {
-		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(" / to filter"))
+		b.WriteString(lipgloss.NewStyle().Foreground(subtle).Render(" / filter  Ctrl+F search"))
 	}
 	b.WriteString("\n")
 
@@ -889,10 +1031,23 @@ func (m Model) renderRow(cells []string, visibleCols []int, rowIdx int, selected
 		padded := val + strings.Repeat(" ", m.colWidths[ci]-stringutil.RuneWidth(val))
 		cell := " " + padded + " "
 
+		isCursorCol := ci == m.cursorCol && m.focused
+
 		if isHeader {
-			cell = lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(cell)
+			if isCursorCol {
+				// Highlight current column header with background
+				cell = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1E1E2E")).Background(highlight).Render(cell)
+			} else {
+				cell = lipgloss.NewStyle().Bold(true).Foreground(highlight).Render(cell)
+			}
 		} else if rowIdx == m.cursorRow && m.focused {
-			cell = lipgloss.NewStyle().Background(selectedBg).Bold(true).Render(cell)
+			if isCursorCol {
+				// Active cell: cursor row + cursor col
+				cell = lipgloss.NewStyle().Background(highlight).Foreground(lipgloss.Color("#1E1E2E")).Bold(true).Render(cell)
+			} else {
+				// Cursor row, other columns
+				cell = lipgloss.NewStyle().Background(selectedBg).Bold(true).Render(cell)
+			}
 		} else if ci < len(cells) && cells[ci] == "<NULL>" {
 			cell = lipgloss.NewStyle().Foreground(m.colors.Subtle).Italic(true).Render(cell)
 		}
@@ -1045,4 +1200,5 @@ func calculateColWidths(columns []string, rows [][]string) []int {
 
 	return widths
 }
+
 

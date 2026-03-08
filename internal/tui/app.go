@@ -465,8 +465,40 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(batch...)
 		}
 
+	case searchResultMsg:
+		// Show the generated query in the editor
+		if msg.Query != "" {
+			m.editor.SetValue(msg.Query)
+		}
+		if msg.Err != nil {
+			m.editor.SetError(msg.Err.Error())
+			return m, nil
+		}
+		tableName := m.currentTable
+		if tableName == "" {
+			tableName = "search"
+		}
+		m.dataView.SetData(tableName, msg.Columns, msg.Rows)
+		m.dataView.SetSearchResult(true)
+		m.titleBar.SetRowCount(msg.RowCount)
+		m.statusBar.SetQueryInfo(msg.Duration, msg.RowCount)
+		m.editor.SetResult(fmt.Sprintf("Search: %d results in %s", msg.RowCount, msg.Duration))
+
 	case dataview.PageRequestMsg:
 		return m, m.fetchPageCmd(msg.Table, msg.Page, msg.Offset, msg.Limit)
+
+	case dataview.SearchRequestMsg:
+		return m, m.searchTableCmd(msg)
+
+	case dataview.SearchClearMsg:
+		// Reload original table data
+		m.dataView.SetSearchResult(false)
+		if msg.Table != "" {
+			return m, tea.Batch(
+				m.fetchTableDataCmd(msg.Table),
+				m.fetchCountCmd(msg.Table),
+			)
+		}
 
 	case pageDataMsg:
 		if msg.err != nil {
@@ -754,6 +786,41 @@ func (m Model) fetchTableDataCmd(table string) tea.Cmd {
 			Duration: result.Duration,
 			IsSelect: true,
 		}
+	}
+}
+
+// searchResultMsg wraps search results to mark them as search data.
+type searchResultMsg struct {
+	QueryResultMsg
+	Query string // the SQL query for display in the editor
+}
+
+func (m Model) searchTableCmd(req dataview.SearchRequestMsg) tea.Cmd {
+	db := m.db
+	pageSize := m.dataView.PageSize()
+	timeout := m.queryTimeout
+
+	// Build the WHERE clause with the actual value inlined for display
+	escapedValue := strings.ReplaceAll(req.Value, "'", "\\'")
+	whereClause := fmt.Sprintf("`%s` %s '%s'", req.Column, req.Operator, escapedValue)
+	query := fmt.Sprintf("SELECT * FROM `%s` WHERE %s LIMIT %d",
+		req.Table, whereClause, pageSize)
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+
+		result, err := db.Execute(ctx, query)
+		if err != nil {
+			return searchResultMsg{QueryResultMsg{Err: err}, query}
+		}
+		return searchResultMsg{QueryResultMsg{
+			Columns:  result.Columns,
+			Rows:     result.Rows,
+			RowCount: result.RowCount,
+			Duration: result.Duration,
+			IsSelect: true,
+		}, query}
 	}
 }
 
