@@ -23,17 +23,19 @@ builds:
         goarch: arm64
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
-    format_overrides:
+    formats_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
 
 nfpms:
   - package_name: dbtui
     vendor: alaa
-    homepage: https://github.com/alaa/dbtui
+    homepage: https://github.com/alaash3lan/dbtui
     maintainer: alaa
     description: A modern terminal-based MySQL/MariaDB client
     license: MIT
@@ -53,9 +55,6 @@ changelog:
       - "^chore:"
 
 release:
-  github:
-    owner: alaa
-    name: dbtui
   draft: false
   prerelease: auto
   name_template: "v{{.Version}}"
