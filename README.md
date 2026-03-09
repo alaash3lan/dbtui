@@ -42,11 +42,30 @@
 
 ## Installation
 
+### Pre-built binaries
+
+Download the latest release from [GitHub Releases](https://github.com/alaa/dbtui/releases). Binaries are available for Linux, macOS, and Windows.
+
+### Linux packages
+
+```bash
+# Debian / Ubuntu
+sudo dpkg -i dbtui_*.deb
+
+# Fedora / RHEL
+sudo rpm -i dbtui_*.rpm
+
+# Alpine
+sudo apk add --allow-untrusted dbtui_*.apk
+```
+
+### Go install
+
 ```bash
 go install github.com/alaa/dbtui@latest
 ```
 
-Or build from source:
+### Build from source
 
 ```bash
 git clone https://github.com/alaa/dbtui.git

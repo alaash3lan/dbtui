@@ -10,7 +10,8 @@ import (
 	"github.com/alaa/dbtui/internal/database"
 )
 
-const version = "0.1.0"
+// version is set at build time via ldflags.
+var version = "dev"
 
 // ParseFlags parses CLI arguments and returns a ConnectionConfig.
 func ParseFlags() (database.ConnectionConfig, error) {
